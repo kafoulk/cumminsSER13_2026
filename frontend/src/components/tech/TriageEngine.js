@@ -4,7 +4,7 @@ export default function TriageEngine() {
   const [step, setStep] = useState(1);
   const [history, setHistory] = useState([]);
 
-  // Mock logic for the "Guided" approach
+  // Mock logic to simulate a triage conversation based on user input
   const handleNextStep = (input) => {
     if (step === 1) {
       setHistory([...history, { type: 'user', text: input }, { type: 'ai', text: 'I see. Based on that fault code, what is the current coolant temperature, and is the fan engaging?' }]);
