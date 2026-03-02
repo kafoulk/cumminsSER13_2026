@@ -1,0 +1,17 @@
+# Environment Variables (API Keys)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+
+# Local Database (Offline Logs)
+backend/database/*.sqlite
+
+# Node Modules
+node_modules/
+.next/
+
+# Large PDF Manuals (local to save repo space)
+backend/knowledge_base/manuals/*.pdf
