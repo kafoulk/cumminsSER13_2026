@@ -1,5 +1,5 @@
-import TriageEngine from '../components/tech/TriageEngine';
-import { Wrench } from 'lucide-react';
+import { Wrench } from "lucide-react";
+import TriageEngine from "../components/tech/TriageEngine";
 
 export default function Home() {
   return (
@@ -11,8 +11,8 @@ export default function Home() {
           <h2 className="text-xl font-bold tracking-tight">Active Triage Session</h2>
         </div>
         <p className="text-slate-400 text-sm">
-          Follow the guided prompts below to diagnose the unit. 
-          Remember to prioritize safety protocols for high-pressure fuel systems.
+          Submit real field payloads to the backend orchestrator, then review the
+          generated service report and canonical decision log.
         </p>
       </section>
 

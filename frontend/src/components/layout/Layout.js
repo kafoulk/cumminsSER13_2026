@@ -1,14 +1,23 @@
-import { useState, useEffect } from 'react';
-import { Wifi, WifiOff, HardDrive, Wrench, LayoutDashboard } from 'lucide-react';
-import Link from 'next/link';
+import { useEffect, useState } from "react";
+import { HardDrive, LayoutDashboard, Wifi, Wrench } from "lucide-react";
+import Link from "next/link";
+import { API_BASE_URL } from "../../lib/api";
 
 export default function Layout({ children }) {
-  const [isOnline, setIsOnline] = useState(true);
+  const [isOnline, setIsOnline] = useState(() => {
+    if (typeof window === "undefined") return true;
+    return navigator.onLine;
+  });
 
   useEffect(() => {
-    setIsOnline(navigator.onLine);
-    window.addEventListener('online', () => setIsOnline(true));
-    window.addEventListener('offline', () => setIsOnline(false));
+    const onlineHandler = () => setIsOnline(true);
+    const offlineHandler = () => setIsOnline(false);
+    window.addEventListener("online", onlineHandler);
+    window.addEventListener("offline", offlineHandler);
+    return () => {
+      window.removeEventListener("online", onlineHandler);
+      window.removeEventListener("offline", offlineHandler);
+    };
   }, []);
 
   return (
@@ -30,6 +39,9 @@ export default function Layout({ children }) {
       </header>
 
       <main className="flex-1 container mx-auto p-4 pb-24 md:pb-4">
+        <div className="text-[11px] text-slate-500 mb-3">
+          Backend: <span className="font-mono">{API_BASE_URL}</span>
+        </div>
         {children}
       </main>
 
