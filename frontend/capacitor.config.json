@@ -1,0 +1,10 @@
+{
+  "appId": "com.cummins.service.reboot",
+  "appName": "Cummins Service Reboot",
+  "webDir": "out",
+  "bundledWebRuntime": false,
+  "server": {
+    "cleartext": true,
+    "androidScheme": "https"
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "inventory_by_location": {
+    "Indy Yard": {
+      "Water pump": 4,
+      "Thermostat": 6,
+      "Coolant hose set": 2,
+      "Radiator": 1,
+      "Fan clutch": 1,
+      "Coolant temperature sensor": 8,
+      "Brake line kit": 0,
+      "Brake pressure sensor": 3,
+      "ABS module": 1,
+      "Fuel filter": 5,
+      "High-pressure fuel pump": 1,
+      "Injector set": 2,
+      "Injector harness": 4,
+      "Fuel rail": 1
+    },
+    "Columbus Depot": {
+      "Water pump": 1,
+      "Thermostat": 0,
+      "Coolant hose set": 2,
+      "Brake line kit": 2,
+      "Brake pressure sensor": 1,
+      "ABS module": 0,
+      "Fuel filter": 3,
+      "High-pressure fuel pump": 0,
+      "Injector set": 1,
+      "Injector harness": 2,
+      "Fuel rail": 0
+    },
+    "Remote Quarry": {
+      "Water pump": 1,
+      "Thermostat": 1,
+      "Coolant hose set": 1,
+      "Brake line kit": 0,
+      "Brake pressure sensor": 0,
+      "ABS module": 0,
+      "Fuel filter": 1,
+      "High-pressure fuel pump": 0,
+      "Injector set": 0,
+      "Injector harness": 1,
+      "Fuel rail": 0
+    },
+    "Tunnel Station": {
+      "Water pump": 0,
+      "Thermostat": 0,
+      "Coolant hose set": 0,
+      "Fuel filter": 2,
+      "High-pressure fuel pump": 0,
+      "Injector set": 1,
+      "Injector harness": 1,
+      "Fuel rail": 0
+    }
+  }
+}

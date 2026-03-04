@@ -1,0 +1,7 @@
+Safety and Warranty Screening Notes (Synthetic)
+
+Escalate for supervisor approval when technician notes include injury risk, fire/smoke risk, braking concerns, or uncertain containment status.
+
+Escalate for supervisor approval when notes indicate warranty ambiguity, coverage dispute, or required authorization prior to parts replacement.
+
+If the triage result indicates unsafe operating condition, mark the job as pending approval and restrict release until a supervisor decision is recorded.

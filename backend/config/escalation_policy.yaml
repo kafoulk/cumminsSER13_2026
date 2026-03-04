@@ -1,0 +1,45 @@
+escalation_policy:
+  policy_version: "hybrid_risk_policy_v2"
+  governance_policy_version: "apex_governance_v2"
+  approval_threshold: 0.70
+  safety_keywords:
+    - unsafe
+    - fire
+    - smoke
+    - brake
+    - hazard
+    - injury
+    - critical
+  warranty_keywords:
+    - warranty
+    - authorization
+    - coverage
+    - claim
+  safety_semantic_weights:
+    danger: 0.30
+    dangerous: 0.35
+    unsafe: 0.35
+    hazard: 0.30
+    risk: 0.12
+    smoke: 0.25
+    fire: 0.45
+    injury: 0.45
+    critical: 0.22
+    brake: 0.20
+    explosion: 0.55
+    toxic: 0.30
+    leak: 0.15
+    leaking: 0.15
+    overheat: 0.20
+    stop operation: 0.40
+    do not operate: 0.45
+    operator danger: 0.45
+  warranty_semantic_weights:
+    warranty: 0.50
+    coverage: 0.35
+    authorization: 0.35
+    approved: 0.20
+    claim: 0.25
+    void: 0.30
+    billable: 0.20
+    oem: 0.15

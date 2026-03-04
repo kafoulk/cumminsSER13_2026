@@ -4,6 +4,7 @@ import {
   approveJob,
   getAgentMetrics,
   getSupervisorQueue,
+  replayOfflineQueue,
   syncOfflineQueue,
 } from "../lib/api";
 
@@ -79,7 +80,13 @@ export default function Supervisor() {
         notes: notesByJob[jobId] || "",
       };
       const result = await approveJob(payload);
-      setMessage(`Updated ${jobId} to ${result.status}.`);
+      if (result.queued_offline) {
+        setMessage(
+          `Decision queued offline (queue id ${result.queue_id}). It will replay when network is available.`
+        );
+      } else {
+        setMessage(`Updated ${jobId} to ${result.status}.`);
+      }
       await loadQueue();
       await loadMetrics();
     } catch (decisionError) {
@@ -94,10 +101,24 @@ export default function Supervisor() {
     setError("");
     setMessage("");
     try {
-      const result = await syncOfflineQueue();
-      setMessage(
-        `Sync complete. processed=${result.processed}, synced=${result.synced}, failed=${result.failed}`
-      );
+      const localReplay = await replayOfflineQueue();
+      let serverResult = null;
+      let serverError = "";
+      try {
+        serverResult = await syncOfflineQueue();
+      } catch (syncError) {
+        serverError = syncError.message;
+      }
+
+      if (serverResult) {
+        setMessage(
+          `Local replay ${localReplay.synced}/${localReplay.processed}. Cloud sync processed=${serverResult.processed}, synced=${serverResult.synced}, failed=${serverResult.failed}.`
+        );
+      } else {
+        setMessage(
+          `Local replay ${localReplay.synced}/${localReplay.processed}. Cloud sync pending (${serverError || "backend unreachable"}).`
+        );
+      }
       await loadQueue();
       await loadMetrics();
     } catch (syncError) {
@@ -213,6 +234,12 @@ export default function Supervisor() {
               <div>
                 <span className="text-slate-400">Escalation reasons:</span>{" "}
                 {(job.escalation_reasons || []).join(", ") || "N/A"}
+              </div>
+              <div>
+                <span className="text-slate-400">Workflow mode:</span> {job.workflow_mode || "N/A"}
+              </div>
+              <div className="text-xs text-slate-400">
+                {job.workflow_intent || "Investigation-only evidence checklist pending supervisor decision."}
               </div>
               <div>
                 <span className="text-slate-400">Risk source:</span>{" "}

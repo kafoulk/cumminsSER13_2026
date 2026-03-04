@@ -1,0 +1,49 @@
+{
+  "technicians": [
+    {
+      "tech_id": "TECH-001",
+      "name": "Morgan Lee",
+      "region": "IN-CENTRAL",
+      "certifications": ["Cooling", "Electrical"],
+      "skill_level": "mid",
+      "availability_status": "available",
+      "current_load": 1
+    },
+    {
+      "tech_id": "TECH-002",
+      "name": "Avery Patel",
+      "region": "OH-CENTRAL",
+      "certifications": ["Brake", "FuelSystem"],
+      "skill_level": "senior",
+      "availability_status": "available",
+      "current_load": 2
+    },
+    {
+      "tech_id": "TECH-003",
+      "name": "Jordan Kim",
+      "region": "IN-CENTRAL",
+      "certifications": ["FuelSystem", "Electrical"],
+      "skill_level": "senior",
+      "availability_status": "available",
+      "current_load": 0
+    },
+    {
+      "tech_id": "TECH-004",
+      "name": "Riley Brooks",
+      "region": "REMOTE",
+      "certifications": ["Cooling", "Brake"],
+      "skill_level": "mid",
+      "availability_status": "available",
+      "current_load": 1
+    },
+    {
+      "tech_id": "TECH-005",
+      "name": "Casey Nguyen",
+      "region": "IN-CENTRAL",
+      "certifications": ["Cooling"],
+      "skill_level": "junior",
+      "availability_status": "busy",
+      "current_load": 3
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+Engine Cooling Diagnostic Guide (Synthetic Extract)
+
+When an over-temperature fault is present, inspect coolant level, radiator airflow, and fan clutch operation before replacing sensors. Confirm thermostat opening temperature with a controlled warm-up.
+
+Oil Pressure Diagnostic Notes (Synthetic Extract)
+
+For low oil pressure complaints, validate oil grade and level, inspect for external leaks, and compare sensor reading to a mechanical gauge. Investigate filter blockage before assuming pump failure.
+
+Fuel System Symptom Guide (Synthetic Extract)
+
+Hard-start or no-start symptoms can be caused by low supply pressure, injector electrical faults, or restricted filters. Verify battery cranking performance prior to fuel rail diagnostics.

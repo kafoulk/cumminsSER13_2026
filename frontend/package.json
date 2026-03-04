@@ -4,17 +4,31 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "npm run build:mobile",
+    "build:web": "next build",
+    "build:mobile": "MOBILE_BUILD=1 next build --webpack",
     "start": "next start",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "mobile:prepare": "npm run mobile:sync",
+    "mobile:sync": "npm run build:mobile && npx cap sync",
+    "mobile:ios": "npm run mobile:prepare && npx cap open ios",
+    "mobile:xcode": "npm run mobile:ios",
+    "mobile:android": "npm run mobile:sync && npx cap open android",
+    "mobile:run:ios": "npm run mobile:sync && npx cap run ios",
+    "mobile:run:android": "npm run mobile:sync && npx cap run android"
   },
   "dependencies": {
+    "@capacitor-community/speech-recognition": "^7.0.1",
+    "@capacitor/android": "^7.4.0",
+    "@capacitor/core": "^7.4.0",
+    "@capacitor/ios": "^7.4.0",
     "lucide-react": "^0.378.0",
     "next": "^16.1.6",
     "react": "^18",
     "react-dom": "^18"
   },
   "devDependencies": {
+    "@capacitor/cli": "^7.4.0",
     "autoprefixer": "^10.0.1",
     "eslint": "^9",
     "eslint-config-next": "^16.1.6",
