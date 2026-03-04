@@ -90,6 +90,7 @@ export default function TriageEngine() {
   const speechRecognitionRef = useRef(null);
   const speechModeRef = useRef("none");
   const speechBaseTextRef = useRef("");
+  const submitCtaRef = useRef(null);
   const createdJobId = useMemo(() => result?.job_id || "", [result]);
   const workflowMode = useMemo(() => {
     if (result?.workflow_mode) return result.workflow_mode;
@@ -561,122 +562,156 @@ export default function TriageEngine() {
     }
   }
 
+  function handleDemoToolsToggle(event) {
+    const detailsElement = event.currentTarget;
+    if (!detailsElement.open || typeof window === "undefined") return;
+
+    window.requestAnimationFrame(() => {
+      const quickLoadButton = detailsElement.querySelector(
+        "[data-demo-safety-quick-load]",
+      );
+      if (!quickLoadButton) return;
+
+      const ctaRect = submitCtaRef.current?.getBoundingClientRect();
+      const visibleBottom = (ctaRect?.top ?? window.innerHeight) - 10;
+      const buttonBottom = quickLoadButton.getBoundingClientRect().bottom;
+
+      if (buttonBottom > visibleBottom) {
+        window.scrollBy({
+          top: buttonBottom - visibleBottom,
+          behavior: "smooth",
+        });
+      }
+    });
+  }
   return (
     <div className="space-y-6">
       <form
         onSubmit={handleSubmit}
-        className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-4"
+        className="relative w-full max-w-md mx-auto space-y-4 pb-[calc(2rem+env(safe-area-inset-bottom))]"
       >
-        <h3 className="text-lg font-bold uppercase tracking-wide text-white">
-          Step 1: Tell Us What Happened
-        </h3>
-        <p className="text-sm text-slate-200">
-          Example: "Truck smells like coolant and temp climbs fast on hills."
-        </p>
+        <div className="rounded-2xl border border-white/10 bg-gradient-to-b from-white/5 to-white/0 p-4 shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
+          <h1 className="text-lg font-bold tracking-tight">
+            STEP 1: TELL US WHAT HAPPENED
+          </h1>
 
-        <label className="space-y-1 block">
-          <div className="flex justify-between items-center">
-            <span className="text-sm text-slate-200 font-semibold">
-              Describe the issue
-            </span>
-            <button
-              type="button"
-              onClick={listening ? stopDictation : startDictation}
-              className={`px-4 py-2 rounded font-semibold text-sm flex items-center gap-2 ${
-                listening
-                  ? "bg-slate-600 hover:bg-slate-500 text-white"
-                  : "bg-slate-800 hover:bg-slate-700 text-white"
-              }`}
-            >
-              <Mic size={18} />
-              {listening ? "Stop Voice" : "Use Voice Input"}
-            </button>
+          <p className="mt-2 text-xs text-slate-400 leading-relaxed">
+            Example: &quot;Truck smells like coolant and temp climbs fast on
+            hills.&quot;
+          </p>
+
+          <div className="mt-5">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-sm font-medium text-slate-200">
+                Describe the issue
+              </span>
+            </div>
+
+            <div className="relative">
+              <textarea
+                value={form.issue_text}
+                onChange={(event) =>
+                  updateField("issue_text", event.target.value)
+                }
+                className="w-full min-h-[120px] resize-none rounded-xl bg-white/5 border border-white/10 px-3 py-3 pr-12 text-[15px] font-normal text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-white/20 focus:ring-4 focus:ring-white/10"
+                placeholder="Example: Engine temp rises fast under load, coolant leaking near radiator, possible safety risk."
+                required
+              />
+
+              <button
+                type="button"
+                onClick={listening ? stopDictation : startDictation}
+                className={`absolute right-3 top-3 h-9 w-9 rounded-lg border grid place-items-center active:scale-95 ${
+                  listening
+                    ? "border-red-500/50 bg-red-500/20 text-red-100"
+                    : "border-white/10 bg-white/5 text-slate-100"
+                }`}
+                aria-label={listening ? "Stop voice input" : "Voice input"}
+                title={listening ? "Stop voice input" : "Voice input"}
+              >
+                <Mic size={16} />
+              </button>
+            </div>
           </div>
-          <textarea
-            value={form.issue_text}
-            onChange={(event) => updateField("issue_text", event.target.value)}
-            className="w-full bg-black border border-slate-700 p-2 rounded min-h-[120px]"
-            placeholder="Example: Engine temp rises fast under load, coolant leaking near radiator, possible safety risk."
-            required
-          />
-        </label>
-        <div className="flex flex-wrap gap-2 items-center">
-          {!speechSupported && (
-            <span className="text-xs text-slate-500">
-              Voice input support depends on device/browser.
-            </span>
-          )}
-          {speechHint && (
-            <span className="text-xs text-slate-400">{speechHint}</span>
-          )}
-        </div>
 
-        <div className="border border-slate-800 rounded p-3 bg-black/20">
-          <h4 className="text-xs text-slate-300">
-            Step 2 (optional): Add IDs or location
-          </h4>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
-            <label className="space-y-1">
-              <span className="text-xs text-slate-400">
-                Equipment ID (optional)
+          <div className="mt-2 flex flex-wrap gap-2 items-center">
+            {!speechSupported && (
+              <span className="text-xs text-slate-500">
+                Voice input support depends on device/browser.
               </span>
-              <input
-                value={form.equipment_id}
-                onChange={(event) =>
-                  updateField("equipment_id", event.target.value)
-                }
-                className="w-full bg-black border border-slate-700 p-2 rounded"
-                placeholder="EQ-1001"
-              />
-            </label>
+            )}
+            {speechHint && (
+              <span className="text-xs text-slate-400">{speechHint}</span>
+            )}
+          </div>
 
-            <label className="space-y-1">
-              <span className="text-xs text-slate-400">
-                Fault Code (optional)
-              </span>
-              <input
-                value={form.fault_code}
-                onChange={(event) =>
-                  updateField("fault_code", event.target.value)
-                }
-                className="w-full bg-black border border-slate-700 p-2 rounded"
-                placeholder="P0217"
-              />
-            </label>
+          <div className="mt-5 border-t border-white/10 pt-4">
+            <div className="text-sm font-medium text-slate-200">
+              Add IDs / location <span className="text-slate-400">(optional)</span>
+            </div>
 
-            <label className="space-y-1">
-              <span className="text-xs text-slate-400">
-                Location (optional)
-              </span>
-              <input
-                value={form.location}
-                onChange={(event) =>
-                  updateField("location", event.target.value)
-                }
-                className="w-full bg-black border border-slate-700 p-2 rounded"
-              />
-            </label>
-            <label className="flex items-center gap-2 mt-6 text-sm">
+            <div className="mt-4 space-y-3">
+              <div>
+                <div className="mb-1 text-xs font-medium text-slate-400">
+                  Equipment ID (optional)
+                </div>
+                <input
+                  value={form.equipment_id}
+                  onChange={(event) =>
+                    updateField("equipment_id", event.target.value)
+                  }
+                  className="w-full h-11 rounded-xl bg-white/5 border border-white/10 px-3 text-[15px] text-slate-100 focus:outline-none focus:border-white/20 focus:ring-4 focus:ring-white/10"
+                  placeholder="EQ-1001"
+                />
+              </div>
+
+              <div>
+                <div className="mb-1 text-xs font-medium text-slate-400">
+                  Fault Code (optional)
+                </div>
+                <input
+                  value={form.fault_code}
+                  onChange={(event) =>
+                    updateField("fault_code", event.target.value)
+                  }
+                  className="w-full h-11 rounded-xl bg-white/5 border border-white/10 px-3 text-[15px] text-slate-100 focus:outline-none focus:border-white/20 focus:ring-4 focus:ring-white/10"
+                  placeholder="P0217"
+                />
+              </div>
+
+              <div>
+                <div className="mb-1 text-xs font-medium text-slate-400">
+                  Location (optional)
+                </div>
+                <input
+                  value={form.location}
+                  onChange={(event) =>
+                    updateField("location", event.target.value)
+                  }
+                  className="w-full h-11 rounded-xl bg-white/5 border border-white/10 px-3 text-[15px] text-slate-100 focus:outline-none focus:border-white/20 focus:ring-4 focus:ring-white/10"
+                  placeholder="Indy Yard"
+                />
+              </div>
+            </div>
+
+            <label className="mt-4 flex items-center gap-2 text-sm text-slate-200">
               <input
                 type="checkbox"
                 checked={form.request_supervisor_review}
                 onChange={(event) =>
-                  updateField("request_supervisor_review", event.target.checked)
+                  updateField(
+                    "request_supervisor_review",
+                    event.target.checked,
+                  )
                 }
+                className="h-4 w-4 rounded border-white/20 bg-white/5"
               />
-              Request supervisor review
+              <span>Request supervisor review</span>
             </label>
           </div>
         </div>
 
-        <button
-          type="submit"
-          disabled={loading}
-          className="bg-cummins-red hover:bg-red-700 transition px-4 py-2 rounded font-semibold disabled:opacity-50"
-        >
-          {loading ? "Building your checklist..." : "Get My Checklist"}
-        </button>
-        <details className="pt-2">
+        <details className="pt-2" onToggle={handleDemoToolsToggle}>
           <summary className="text-xs text-slate-500 cursor-pointer">
             Demo tools
           </summary>
@@ -699,12 +734,23 @@ export default function TriageEngine() {
             <button
               type="button"
               onClick={() => loadScenarioById("safety_escalation")}
+              data-demo-safety-quick-load
               className="border border-orange-600 text-orange-300 hover:bg-orange-950/30 px-4 py-2 rounded font-semibold"
             >
               Quick Load Safety Scenario
             </button>
           </div>
         </details>
+
+        <div ref={submitCtaRef} className="fixed left-4 right-4 bottom-[calc(72px+env(safe-area-inset-bottom))] max-w-md mx-auto">
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full h-12 rounded-xl bg-cummins-red text-white font-semibold shadow-lg active:scale-[0.99] disabled:opacity-60"
+          >
+            {loading ? "Building your checklist..." : "Get My Checklist"}
+          </button>
+        </div>
       </form>
 
       {error && (
@@ -1114,3 +1160,7 @@ export default function TriageEngine() {
     </div>
   );
 }
+
+
+
+
