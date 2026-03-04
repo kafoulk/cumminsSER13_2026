@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Mic } from "lucide-react";
 import { SpeechRecognition } from "@capacitor-community/speech-recognition";
 import {
   getDemoScenarios,
@@ -34,7 +35,9 @@ function hasGrantedSpeechPermission(permissionStatus) {
 }
 
 function buildSpeechErrorHint(rawError) {
-  const rawText = String(rawError?.message || rawError?.error || rawError || "").trim();
+  const rawText = String(
+    rawError?.message || rawError?.error || rawError || "",
+  ).trim();
   const lowered = rawText.toLowerCase();
   if (
     lowered.includes("not-allowed") ||
@@ -55,7 +58,8 @@ function buildSpeechErrorHint(rawError) {
 
 function toFriendlyRisk(riskLevel) {
   const normalized = String(riskLevel || "").toUpperCase();
-  if (normalized === "CRITICAL" || normalized === "HIGH") return "High safety risk";
+  if (normalized === "CRITICAL" || normalized === "HIGH")
+    return "High safety risk";
   if (normalized === "MEDIUM") return "Medium risk";
   return "Low risk";
 }
@@ -154,15 +158,18 @@ export default function TriageEngine() {
     try {
       const available = await SpeechRecognition.available();
       if (!available?.available) {
-        setSpeechHint("Voice input is not available on this phone. Keep typing instead.");
+        setSpeechHint(
+          "Voice input is not available on this phone. Keep typing instead.",
+        );
         return true;
       }
       const permission = await SpeechRecognition.checkPermissions();
       if (!hasGrantedSpeechPermission(permission)) {
-        const requestedPermission = await SpeechRecognition.requestPermissions();
+        const requestedPermission =
+          await SpeechRecognition.requestPermissions();
         if (!hasGrantedSpeechPermission(requestedPermission)) {
           setSpeechHint(
-            "Microphone permission is blocked. In iPhone Settings > Cummins Service Reboot, enable Microphone and Speech Recognition."
+            "Microphone permission is blocked. In iPhone Settings > Cummins Service Reboot, enable Microphone and Speech Recognition.",
           );
           return true;
         }
@@ -172,9 +179,13 @@ export default function TriageEngine() {
       await SpeechRecognition.removeAllListeners();
       await SpeechRecognition.addListener("partialResults", (data) => {
         const matches = Array.isArray(data?.matches) ? data.matches : [];
-        const partialText = matches.length ? String(matches[matches.length - 1] || "") : "";
+        const partialText = matches.length
+          ? String(matches[matches.length - 1] || "")
+          : "";
         if (!partialText) return;
-        const combined = `${speechBaseTextRef.current} ${partialText}`.replace(/\s+/g, " ").trim();
+        const combined = `${speechBaseTextRef.current} ${partialText}`
+          .replace(/\s+/g, " ")
+          .trim();
         setForm((prev) => ({ ...prev, issue_text: combined }));
       });
       await SpeechRecognition.addListener("listeningState", (data) => {
@@ -206,7 +217,9 @@ export default function TriageEngine() {
   function startWebDictation() {
     const Ctor = getSpeechRecognitionCtor();
     if (!Ctor) {
-      setSpeechHint("Voice input is not available on this device. Keep typing instead.");
+      setSpeechHint(
+        "Voice input is not available on this device. Keep typing instead.",
+      );
       return;
     }
     if (listening) return;
@@ -222,7 +235,9 @@ export default function TriageEngine() {
       for (let idx = 0; idx < event.results.length; idx += 1) {
         transcript += `${event.results[idx][0].transcript} `;
       }
-      const combined = `${speechBaseTextRef.current} ${transcript}`.replace(/\s+/g, " ").trim();
+      const combined = `${speechBaseTextRef.current} ${transcript}`
+        .replace(/\s+/g, " ")
+        .trim();
       setForm((prev) => ({ ...prev, issue_text: combined }));
     };
     recognition.onerror = (event) => {
@@ -300,7 +315,8 @@ export default function TriageEngine() {
           status: data.status || "QUEUED_OFFLINE",
           requires_approval: true,
           workflow_mode: "INVESTIGATION_ONLY",
-          workflow_intent: "Submission queued locally. Collect details while waiting for replay.",
+          workflow_intent:
+            "Submission queued locally. Collect details while waiting for replay.",
           allowed_actions: [
             "capture_observation",
             "capture_measurement",
@@ -338,7 +354,10 @@ export default function TriageEngine() {
           mode_effective: "queued_local",
           model_selected: "pending_replay",
           model_tier: "pending_replay",
-          schedule_hint: { priority_hint: "PENDING", eta_bucket: "Pending replay" },
+          schedule_hint: {
+            priority_hint: "PENDING",
+            eta_bucket: "Pending replay",
+          },
         });
         setWorkflowSteps([]);
         setWorkflowEvents([]);
@@ -391,11 +410,15 @@ export default function TriageEngine() {
     setForm({
       issue_text:
         selected.payload.issue_text ||
-        [selected.payload.symptoms || "", selected.payload.notes || ""].filter(Boolean).join(". "),
+        [selected.payload.symptoms || "", selected.payload.notes || ""]
+          .filter(Boolean)
+          .join(". "),
       equipment_id: selected.payload.equipment_id || "",
       fault_code: selected.payload.fault_code || "",
       location: selected.payload.location || "",
-      request_supervisor_review: Boolean(selected.payload.request_supervisor_review),
+      request_supervisor_review: Boolean(
+        selected.payload.request_supervisor_review,
+      ),
     });
   }
 
@@ -435,10 +458,13 @@ export default function TriageEngine() {
                   : prev.suppressed_guidance,
               escalation_reasons: data.escalation_reasons || [],
               risk_signals: data.risk_signals || prev.risk_signals,
-              escalation_policy_version: data.escalation_policy_version || prev.escalation_policy_version,
-              policy_config_hash: data.policy_config_hash || prev.policy_config_hash,
+              escalation_policy_version:
+                data.escalation_policy_version ||
+                prev.escalation_policy_version,
+              policy_config_hash:
+                data.policy_config_hash || prev.policy_config_hash,
             }
-          : prev
+          : prev,
       );
     } catch (workflowError) {
       setError(workflowError.message);
@@ -476,10 +502,13 @@ export default function TriageEngine() {
                   : prev.suppressed_guidance,
               escalation_reasons: data.escalation_reasons || [],
               risk_signals: data.risk_signals || prev.risk_signals,
-              escalation_policy_version: data.escalation_policy_version || prev.escalation_policy_version,
-              policy_config_hash: data.policy_config_hash || prev.policy_config_hash,
+              escalation_policy_version:
+                data.escalation_policy_version ||
+                prev.escalation_policy_version,
+              policy_config_hash:
+                data.policy_config_hash || prev.policy_config_hash,
             }
-          : prev
+          : prev,
       );
       await refreshWorkflow();
       await loadTimeline(createdJobId);
@@ -512,13 +541,16 @@ export default function TriageEngine() {
                   : prev.suppressed_guidance,
               escalation_reasons: data.escalation_reasons || [],
               risk_signals: data.risk_signals || prev.risk_signals,
-              escalation_policy_version: data.escalation_policy_version || prev.escalation_policy_version,
-              policy_config_hash: data.policy_config_hash || prev.policy_config_hash,
+              escalation_policy_version:
+                data.escalation_policy_version ||
+                prev.escalation_policy_version,
+              policy_config_hash:
+                data.policy_config_hash || prev.policy_config_hash,
               triage: data.triage,
               evidence: data.evidence,
               schedule_hint: data.schedule_hint,
             }
-          : prev
+          : prev,
       );
       await refreshWorkflow();
       await loadTimeline(createdJobId);
@@ -531,14 +563,35 @@ export default function TriageEngine() {
 
   return (
     <div className="space-y-6">
-      <form onSubmit={handleSubmit} className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-4">
-        <h3 className="text-sm uppercase tracking-wide text-slate-400">Step 1: Tell Us What Happened</h3>
-        <p className="text-xs text-slate-400">
-          Use plain words. Example: “Truck smells like coolant and temp climbs fast on hills.”
+      <form
+        onSubmit={handleSubmit}
+        className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-4"
+      >
+        <h3 className="text-lg font-bold uppercase tracking-wide text-white">
+          Step 1: Tell Us What Happened
+        </h3>
+        <p className="text-sm text-slate-200">
+          Example: "Truck smells like coolant and temp climbs fast on hills."
         </p>
 
         <label className="space-y-1 block">
-          <span className="text-xs text-slate-400">Describe the issue (plain English)</span>
+          <div className="flex justify-between items-center">
+            <span className="text-sm text-slate-200 font-semibold">
+              Describe the issue
+            </span>
+            <button
+              type="button"
+              onClick={listening ? stopDictation : startDictation}
+              className={`px-4 py-2 rounded font-semibold text-sm flex items-center gap-2 ${
+                listening
+                  ? "bg-slate-600 hover:bg-slate-500 text-white"
+                  : "bg-slate-800 hover:bg-slate-700 text-white"
+              }`}
+            >
+              <Mic size={18} />
+              {listening ? "Stop Voice" : "Use Voice Input"}
+            </button>
+          </div>
           <textarea
             value={form.issue_text}
             onChange={(event) => updateField("issue_text", event.target.value)}
@@ -548,53 +601,58 @@ export default function TriageEngine() {
           />
         </label>
         <div className="flex flex-wrap gap-2 items-center">
-          <button
-            type="button"
-            onClick={listening ? stopDictation : startDictation}
-            className={`px-4 py-2 rounded font-semibold text-sm ${
-              listening
-                ? "bg-red-700 hover:bg-red-600 text-white"
-                : "bg-emerald-700 hover:bg-emerald-600 text-white"
-            }`}
-          >
-            {listening ? "Stop Voice" : "Use Voice Input"}
-          </button>
           {!speechSupported && (
-            <span className="text-xs text-slate-500">Voice input support depends on device/browser.</span>
+            <span className="text-xs text-slate-500">
+              Voice input support depends on device/browser.
+            </span>
           )}
-          {speechHint && <span className="text-xs text-slate-400">{speechHint}</span>}
+          {speechHint && (
+            <span className="text-xs text-slate-400">{speechHint}</span>
+          )}
         </div>
 
-        <details className="border border-slate-800 rounded p-3 bg-black/20">
-          <summary className="text-xs text-slate-300 cursor-pointer">
+        <div className="border border-slate-800 rounded p-3 bg-black/20">
+          <h4 className="text-xs text-slate-300">
             Step 2 (optional): Add IDs or location
-          </summary>
+          </h4>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
             <label className="space-y-1">
-              <span className="text-xs text-slate-400">Equipment ID (optional)</span>
+              <span className="text-xs text-slate-400">
+                Equipment ID (optional)
+              </span>
               <input
                 value={form.equipment_id}
-                onChange={(event) => updateField("equipment_id", event.target.value)}
+                onChange={(event) =>
+                  updateField("equipment_id", event.target.value)
+                }
                 className="w-full bg-black border border-slate-700 p-2 rounded"
                 placeholder="EQ-1001"
               />
             </label>
 
             <label className="space-y-1">
-              <span className="text-xs text-slate-400">Fault Code (optional)</span>
+              <span className="text-xs text-slate-400">
+                Fault Code (optional)
+              </span>
               <input
                 value={form.fault_code}
-                onChange={(event) => updateField("fault_code", event.target.value)}
+                onChange={(event) =>
+                  updateField("fault_code", event.target.value)
+                }
                 className="w-full bg-black border border-slate-700 p-2 rounded"
                 placeholder="P0217"
               />
             </label>
 
             <label className="space-y-1">
-              <span className="text-xs text-slate-400">Location (optional)</span>
+              <span className="text-xs text-slate-400">
+                Location (optional)
+              </span>
               <input
                 value={form.location}
-                onChange={(event) => updateField("location", event.target.value)}
+                onChange={(event) =>
+                  updateField("location", event.target.value)
+                }
                 className="w-full bg-black border border-slate-700 p-2 rounded"
               />
             </label>
@@ -602,12 +660,14 @@ export default function TriageEngine() {
               <input
                 type="checkbox"
                 checked={form.request_supervisor_review}
-                onChange={(event) => updateField("request_supervisor_review", event.target.checked)}
+                onChange={(event) =>
+                  updateField("request_supervisor_review", event.target.checked)
+                }
               />
-              Request supervisor review (manual)
+              Request supervisor review
             </label>
           </div>
-        </details>
+        </div>
 
         <button
           type="submit"
@@ -617,7 +677,9 @@ export default function TriageEngine() {
           {loading ? "Building your checklist..." : "Get My Checklist"}
         </button>
         <details className="pt-2">
-          <summary className="text-xs text-slate-500 cursor-pointer">Demo tools</summary>
+          <summary className="text-xs text-slate-500 cursor-pointer">
+            Demo tools
+          </summary>
           <div className="pt-2 grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2 items-end">
             <label className="space-y-1">
               <span className="text-xs text-slate-400">Demo scenario</span>
@@ -670,22 +732,25 @@ export default function TriageEngine() {
 
           {result.local_only && (
             <div className="bg-amber-900/20 border border-amber-600/60 text-amber-200 p-3 rounded text-sm">
-              Running on on-device offline fallback model. This job is queued for backend reconciliation when
-              connectivity returns.
+              Running on on-device offline fallback model. This job is queued
+              for backend reconciliation when connectivity returns.
             </div>
           )}
 
           {result.status === "QUEUED_OFFLINE" ? (
             <div className="bg-yellow-900/20 border border-yellow-600/60 text-yellow-200 p-3 rounded text-sm">
-              This submission is queued on-device. Replay queue when connectivity returns to run backend agents.
+              This submission is queued on-device. Replay queue when
+              connectivity returns to run backend agents.
             </div>
           ) : result.requires_approval ? (
             <div className="bg-orange-900/20 border border-orange-600/60 text-orange-200 p-3 rounded text-sm">
-              This job escalated to supervisor review and should appear in the Supervisor Queue.
+              This job escalated to supervisor review and should appear in the
+              Supervisor Queue.
             </div>
           ) : (
             <div className="bg-sky-900/20 border border-sky-600/50 text-sky-200 p-3 rounded text-sm">
-              This job did not escalate. Only `PENDING_APPROVAL` jobs appear in Supervisor Queue.
+              This job did not escalate. Only `PENDING_APPROVAL` jobs appear in
+              Supervisor Queue.
             </div>
           )}
 
@@ -705,18 +770,20 @@ export default function TriageEngine() {
                   ? "Collect additional evidence for supervisor decision. Fix guidance is suppressed."
                   : "Execute repair workflow and verify issue resolution.")}
             </div>
-            {Array.isArray(result.allowed_actions) && result.allowed_actions.length > 0 && (
-              <div className="text-xs mt-2">
-                Allowed actions: {result.allowed_actions.join(", ")}
-              </div>
-            )}
+            {Array.isArray(result.allowed_actions) &&
+              result.allowed_actions.length > 0 && (
+                <div className="text-xs mt-2">
+                  Allowed actions: {result.allowed_actions.join(", ")}
+                </div>
+              )}
           </div>
 
-          {Array.isArray(result.escalation_reasons) && result.escalation_reasons.length > 0 && (
-            <div className="bg-slate-800/60 border border-slate-700 text-slate-200 p-3 rounded text-sm">
-              Escalation reasons: {result.escalation_reasons.join(", ")}
-            </div>
-          )}
+          {Array.isArray(result.escalation_reasons) &&
+            result.escalation_reasons.length > 0 && (
+              <div className="bg-slate-800/60 border border-slate-700 text-slate-200 p-3 rounded text-sm">
+                Escalation reasons: {result.escalation_reasons.join(", ")}
+              </div>
+            )}
 
           <details className="bg-black/30 border border-slate-800 rounded p-3 text-sm">
             <summary className="text-xs uppercase tracking-wide text-slate-400 cursor-pointer">
@@ -724,7 +791,9 @@ export default function TriageEngine() {
             </summary>
             <div className="space-y-3 pt-3">
               <div className="bg-black/30 border border-slate-800 rounded p-3 text-sm space-y-1">
-                <div className="text-xs uppercase tracking-wide text-slate-400">Escalation Decision</div>
+                <div className="text-xs uppercase tracking-wide text-slate-400">
+                  Escalation Decision
+                </div>
                 <div>
                   Policy version:{" "}
                   <span className="font-mono text-slate-300">
@@ -738,51 +807,90 @@ export default function TriageEngine() {
                   </span>
                   {" | "}confidence: {result.risk_signals?.confidence ?? "N/A"}
                 </div>
-                <div>Safety signal: {String(Boolean(result.risk_signals?.safety_signal))}</div>
-                <div>Warranty signal: {String(Boolean(result.risk_signals?.warranty_signal))}</div>
-                <div className="text-xs text-slate-400">
-                  Matched safety terms: {(result.risk_signals?.matched_terms?.safety || []).join(", ") || "none"}
+                <div>
+                  Safety signal:{" "}
+                  {String(Boolean(result.risk_signals?.safety_signal))}
+                </div>
+                <div>
+                  Warranty signal:{" "}
+                  {String(Boolean(result.risk_signals?.warranty_signal))}
                 </div>
                 <div className="text-xs text-slate-400">
-                  Matched warranty terms: {(result.risk_signals?.matched_terms?.warranty || []).join(", ") || "none"}
+                  Matched safety terms:{" "}
+                  {(result.risk_signals?.matched_terms?.safety || []).join(
+                    ", ",
+                  ) || "none"}
                 </div>
                 <div className="text-xs text-slate-400">
-                  Rationale: {result.risk_signals?.rationale || "No rationale available"}
+                  Matched warranty terms:{" "}
+                  {(result.risk_signals?.matched_terms?.warranty || []).join(
+                    ", ",
+                  ) || "none"}
+                </div>
+                <div className="text-xs text-slate-400">
+                  Rationale:{" "}
+                  {result.risk_signals?.rationale || "No rationale available"}
                 </div>
               </div>
 
               <div className="bg-black/30 border border-slate-800 rounded p-3 text-sm space-y-1">
-                <div className="text-xs uppercase tracking-wide text-slate-400">Model Route</div>
-                <div>
-                  Mode: <span className="font-mono">{result.mode_effective || "N/A"}</span>
+                <div className="text-xs uppercase tracking-wide text-slate-400">
+                  Model Route
                 </div>
                 <div>
-                  Model: <span className="font-mono">{result.model_selected || "N/A"}</span>
+                  Mode:{" "}
+                  <span className="font-mono">
+                    {result.mode_effective || "N/A"}
+                  </span>
                 </div>
                 <div>
-                  Tier: <span className="font-mono">{result.model_tier || "N/A"}</span>
+                  Model:{" "}
+                  <span className="font-mono">
+                    {result.model_selected || "N/A"}
+                  </span>
+                </div>
+                <div>
+                  Tier:{" "}
+                  <span className="font-mono">
+                    {result.model_tier || "N/A"}
+                  </span>
                 </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div className="bg-black/30 border border-slate-800 rounded p-3 text-sm">
-                  <div className="text-xs uppercase text-red-400 mb-2">Agent 1: Triage</div>
-                  <div className="text-slate-300">Confidence: {result.triage?.confidence}</div>
-                  <div className="text-slate-300 mt-1">{result.triage?.summary}</div>
-                </div>
-                <div className="bg-black/30 border border-slate-800 rounded p-3 text-sm">
-                  <div className="text-xs uppercase text-red-400 mb-2">Agent 2: Parts / Evidence</div>
-                  <div className="text-slate-300">Confidence: {result.evidence?.confidence}</div>
+                  <div className="text-xs uppercase text-red-400 mb-2">
+                    Agent 1: Triage
+                  </div>
+                  <div className="text-slate-300">
+                    Confidence: {result.triage?.confidence}
+                  </div>
                   <div className="text-slate-300 mt-1">
-                    Parts: {(result.evidence?.parts_candidates || []).join(", ")}
+                    {result.triage?.summary}
                   </div>
                 </div>
                 <div className="bg-black/30 border border-slate-800 rounded p-3 text-sm">
-                  <div className="text-xs uppercase text-red-400 mb-2">Agent 3: Scheduler</div>
+                  <div className="text-xs uppercase text-red-400 mb-2">
+                    Agent 2: Parts / Evidence
+                  </div>
+                  <div className="text-slate-300">
+                    Confidence: {result.evidence?.confidence}
+                  </div>
+                  <div className="text-slate-300 mt-1">
+                    Parts:{" "}
+                    {(result.evidence?.parts_candidates || []).join(", ")}
+                  </div>
+                </div>
+                <div className="bg-black/30 border border-slate-800 rounded p-3 text-sm">
+                  <div className="text-xs uppercase text-red-400 mb-2">
+                    Agent 3: Scheduler
+                  </div>
                   <div className="text-slate-300">
                     Priority: {result.schedule_hint?.priority_hint || "N/A"}
                   </div>
-                  <div className="text-slate-300 mt-1">ETA: {result.schedule_hint?.eta_bucket || "N/A"}</div>
+                  <div className="text-slate-300 mt-1">
+                    ETA: {result.schedule_hint?.eta_bucket || "N/A"}
+                  </div>
                 </div>
               </div>
             </div>
@@ -793,7 +901,9 @@ export default function TriageEngine() {
             disabled={loadingDetails}
             className="border border-slate-600 hover:border-slate-500 px-3 py-2 rounded text-sm"
           >
-            {loadingDetails ? "Loading job details..." : "Load Full Job + Decision Log"}
+            {loadingDetails
+              ? "Loading job details..."
+              : "Load Full Job + Decision Log"}
           </button>
           <button
             onClick={refreshWorkflow}
@@ -822,7 +932,9 @@ export default function TriageEngine() {
       {workflowSteps.length > 0 && (
         <section className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-3">
           <h3 className="font-bold text-lg">
-            {investigationOnly ? "Step-by-Step Evidence Checklist" : "Step-by-Step Repair Checklist"}
+            {investigationOnly
+              ? "Step-by-Step Evidence Checklist"
+              : "Step-by-Step Repair Checklist"}
           </h3>
           <p className="text-xs text-slate-400">
             {investigationOnly
@@ -831,18 +943,25 @@ export default function TriageEngine() {
           </p>
           <div className="space-y-3">
             {workflowSteps.map((step) => (
-              <div key={step.step_id} className="border border-slate-800 rounded p-3 space-y-2">
+              <div
+                key={step.step_id}
+                className="border border-slate-800 rounded p-3 space-y-2"
+              >
                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
                   <div>
                     <div className="text-sm font-semibold">
                       {step.step_order}. {step.title}
                     </div>
-                    <div className="text-xs text-slate-400">{step.instructions}</div>
+                    <div className="text-xs text-slate-400">
+                      {step.instructions}
+                    </div>
                     <div className="text-xs text-slate-500 mt-2">
-                      What to capture: {(step.required_inputs || []).join(", ") || "N/A"}
+                      What to capture:{" "}
+                      {(step.required_inputs || []).join(", ") || "N/A"}
                     </div>
                     <div className="text-xs text-slate-500">
-                      Done when: {(step.pass_criteria || []).join(", ") || "N/A"}
+                      Done when:{" "}
+                      {(step.pass_criteria || []).join(", ") || "N/A"}
                     </div>
                     <div className="text-xs text-slate-500">
                       Recommended parts:{" "}
@@ -923,15 +1042,21 @@ export default function TriageEngine() {
 
       {workflowEvents.length > 0 && (
         <details className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-2">
-          <summary className="font-bold text-lg cursor-pointer">Workflow Events (Advanced)</summary>
+          <summary className="font-bold text-lg cursor-pointer">
+            Workflow Events (Advanced)
+          </summary>
           <div className="max-h-64 overflow-auto border border-slate-800 rounded mt-2">
             {workflowEvents.map((event) => (
-              <div key={event.id} className="p-3 border-b border-slate-800 last:border-b-0 text-xs">
+              <div
+                key={event.id}
+                className="p-3 border-b border-slate-800 last:border-b-0 text-xs"
+              >
                 <div className="font-mono text-slate-400">
                   {event.ts} | {event.actor_id} | {event.event_type}
                 </div>
                 <div>
-                  step: {event.step_id || "N/A"} | output: {JSON.stringify(event.output_json || {})}
+                  step: {event.step_id || "N/A"} | output:{" "}
+                  {JSON.stringify(event.output_json || {})}
                 </div>
               </div>
             ))}
@@ -941,14 +1066,21 @@ export default function TriageEngine() {
 
       {jobDetails?.decision_log?.length > 0 && (
         <details className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-2">
-          <summary className="font-bold text-lg cursor-pointer">Decision Log (Advanced)</summary>
+          <summary className="font-bold text-lg cursor-pointer">
+            Decision Log (Advanced)
+          </summary>
           <div className="max-h-80 overflow-auto border border-slate-800 rounded mt-2">
             {jobDetails.decision_log.map((entry) => (
-              <div key={entry.id} className="p-3 border-b border-slate-800 last:border-b-0 text-sm">
+              <div
+                key={entry.id}
+                className="p-3 border-b border-slate-800 last:border-b-0 text-sm"
+              >
                 <div className="font-mono text-xs text-slate-400">
                   {entry.ts} | {entry.agent_id} | {entry.action}
                 </div>
-                <div className="text-slate-200">confidence: {entry.confidence}</div>
+                <div className="text-slate-200">
+                  confidence: {entry.confidence}
+                </div>
               </div>
             ))}
           </div>
@@ -957,7 +1089,9 @@ export default function TriageEngine() {
 
       {timeline.length > 0 && (
         <details className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-2">
-          <summary className="font-bold text-lg cursor-pointer">Timeline (Advanced)</summary>
+          <summary className="font-bold text-lg cursor-pointer">
+            Timeline (Advanced)
+          </summary>
           <div className="max-h-80 overflow-auto border border-slate-800 rounded mt-2">
             {timeline.map((event) => (
               <div
@@ -965,10 +1099,13 @@ export default function TriageEngine() {
                 className="p-3 border-b border-slate-800 last:border-b-0 text-xs"
               >
                 <div className="font-mono text-slate-400">
-                  {event.ts} | {event.kind} | {event.actor_id} | {event.event_name}
+                  {event.ts} | {event.kind} | {event.actor_id} |{" "}
+                  {event.event_name}
                 </div>
                 {event.step_id && <div>step: {event.step_id}</div>}
-                {typeof event.confidence === "number" && <div>confidence: {event.confidence}</div>}
+                {typeof event.confidence === "number" && (
+                  <div>confidence: {event.confidence}</div>
+                )}
               </div>
             ))}
           </div>

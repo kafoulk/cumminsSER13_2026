@@ -1,3 +1,18 @@
+/* Import fonts: Roboto (bold weight) from Google, and declare a
+   placeholder for the Cummins brand font.  Replace '/fonts/CumminsBrand.woff2'
+   with the actual font file when available. */
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@700&display=swap');
+
+/*
+@font-face {
+  font-family: 'Cummins Brand';
+  src: url('/fonts/CumminsBrand.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+*/
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -8,11 +23,18 @@ body,
   height: 100%;
 }
 
+/* base page styling */
 body {
   margin: 0;
-  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-  background: #020617;
+  font-family: 'Roboto', sans-serif;
+  font-weight: 700;          /* body text should be bold */
+  background: #000;         /* solid black page background */
   color: #e2e8f0;
+}
+
+/* headings use the Cummins brand font */
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Cummins Brand', sans-serif;
 }
 
 .safe-top {

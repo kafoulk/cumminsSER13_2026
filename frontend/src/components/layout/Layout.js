@@ -2,9 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   HardDrive,
   LayoutDashboard,
-  RefreshCw,
   Settings,
-  UploadCloud,
   Wifi,
   Wrench,
 } from "lucide-react";
@@ -105,7 +103,9 @@ export default function Layout({ children }) {
     setReplayMessage("");
     try {
       const result = await replayOfflineQueue();
-      setReplayMessage(`Replayed ${result.synced}/${result.processed} queued action(s).`);
+      setReplayMessage(
+        `Replayed ${result.synced}/${result.processed} queued action(s).`,
+      );
       await refreshQueueState();
       await refreshRuntimeProof();
     } catch (error) {
@@ -116,18 +116,22 @@ export default function Layout({ children }) {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col safe-left safe-right">
-      <header className="safe-top bg-black border-b border-slate-800 p-4 flex flex-col md:flex-row md:justify-between md:items-center gap-3 sticky top-0 z-50">
+    <div className="min-h-screen bg-black text-slate-100 flex flex-col safe-left safe-right">
+      {/* small header with proper spacing and vertical centering */}
+      <header className="safe-top bg-white border-b border-slate-200 px-4 py-2 h-[56px] flex items-center justify-between sticky top-0 z-50">
         <div className="flex items-center gap-3">
-          <div className="bg-red-600 p-1.5 rounded">
-            <Wrench size={20} className="text-white" />
-          </div>
-          <span className="font-bold tracking-tighter text-lg">
-            CUMMINS <span className="text-red-600">SERVICE</span>
+          {/* logo sized to 35x35px */}
+          <img
+            src="/cummins-logo.svg"
+            alt="Cummins logo"
+            className="h-[35px] w-[35px]"
+          />
+          <span className="font-heading font-bold tracking-tighter text-lg text-black">
+            Cummins <span className="text-cummins-red">Service</span>
           </span>
         </div>
 
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center">
           <div
             className={`flex items-center gap-2 px-3 py-1 rounded-full border text-[10px] font-bold ${
               isOnline
@@ -138,28 +142,6 @@ export default function Layout({ children }) {
             {isOnline ? <Wifi size={12} /> : <HardDrive size={12} />}
             {isOnline ? "NETWORK ONLINE" : "NETWORK OFFLINE"}
           </div>
-          <div className="flex items-center gap-2 px-3 py-1 rounded-full border border-blue-700/40 bg-blue-900/20 text-[10px] font-bold text-blue-200">
-            MODE: {toModeLabel(appMode)}
-          </div>
-          <div className="flex items-center gap-2 px-3 py-1 rounded-full border border-slate-700 bg-slate-900 text-[10px] font-bold text-slate-300">
-            MODEL: {runtimeModel}
-          </div>
-          <div className="flex items-center gap-2 px-3 py-1 rounded-full border border-slate-700 bg-slate-900 text-[10px] font-bold text-slate-300">
-            TIER: {runtimeTier}
-          </div>
-          <div className="flex items-center gap-2 px-3 py-1 rounded-full border border-slate-700 bg-slate-900 text-[10px] font-bold text-slate-300">
-            <UploadCloud size={12} />
-            QUEUED ACTIONS: {queueCount}
-          </div>
-          <button
-            type="button"
-            onClick={handleReplayQueue}
-            disabled={replaying || queueCount === 0}
-            className="px-3 py-1 rounded border border-slate-700 bg-slate-900 text-[10px] font-bold text-slate-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
-          >
-            <RefreshCw size={12} />
-            {replaying ? "REPLAYING..." : "REPLAY QUEUE"}
-          </button>
         </div>
       </header>
 
@@ -169,19 +151,14 @@ export default function Layout({ children }) {
             {replayMessage}
           </div>
         )}
-        <div className="text-[11px] text-slate-500 mb-3 space-y-1">
-          <div>
-            Backend: <span className="font-mono">{apiBaseUrl}</span>
-          </div>
-          <div>
-            Default build URL: <span className="font-mono">{API_BASE_URL}</span>
-          </div>
-        </div>
         {children}
       </main>
 
       <nav className="safe-bottom fixed bottom-0 left-0 right-0 bg-black border-t border-slate-800 p-3 grid grid-cols-3 md:hidden">
-        <Link href="/" className="flex flex-col items-center gap-1 text-slate-400 hover:text-red-500">
+        <Link
+          href="/"
+          className="flex flex-col items-center gap-1 text-slate-400 hover:text-red-500"
+        >
           <Wrench size={20} />
           <span className="text-[10px] font-bold uppercase">Job</span>
         </Link>
