@@ -117,35 +117,32 @@ export default function Layout({ children }) {
 
   return (
     <div className="min-h-screen bg-black text-slate-100 flex flex-col safe-left safe-right">
-      {/* small header with proper spacing and vertical centering */}
-      <header className="safe-top bg-white border-b border-slate-200 px-4 py-2 h-[56px] flex items-center justify-between sticky top-0 z-50">
-        <div className="flex items-center gap-3">
-          {/* logo sized to 35x35px */}
-          <img
-            src="/cummins-logo.svg"
-            alt="Cummins logo"
-            className="h-[35px] w-[35px]"
-          />
-          <span className="font-heading font-bold tracking-tighter text-lg text-black">
-            Cummins <span className="text-cummins-red">Service</span>
-          </span>
-        </div>
+      <header className="safe-top bg-black/80 backdrop-blur border-b border-white/10 px-4 h-[56px] flex items-center justify-between sticky top-0 z-50">
+      <div className="flex items-center gap-2.5">
+        <img
+          src="/cummins-logo.svg"
+          alt="Cummins logo"
+          className="h-9 w-9 shrink-0 rounded-md bg-white p-1"
+        />
+       <span className="inline-flex items-baseline gap-1 font-heading font-bold tracking-tighter text-lg leading-none text-white">
+            <span>Cummins</span>
+            <span className="relative top-[1px] text-cummins-red">Service</span>
+       </span>
+      </div>
 
-        <div className="flex items-center">
-          <div
-            className={`flex items-center gap-2 px-3 py-1 rounded-full border text-[10px] font-bold ${
-              isOnline
-                ? "border-green-500/30 bg-green-500/10 text-green-400"
-                : "border-orange-500/30 bg-orange-500/10 text-orange-400"
-            }`}
-          >
-            {isOnline ? <Wifi size={12} /> : <HardDrive size={12} />}
-            {isOnline ? "NETWORK ONLINE" : "NETWORK OFFLINE"}
-          </div>
+        <div
+          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[10px] font-medium ${
+            isOnline
+              ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
+              : "border-amber-400/30 bg-amber-400/10 text-amber-200"
+          }`}
+        >
+          {isOnline ? <Wifi size={12} /> : <HardDrive size={12} />}
+          <span className="tracking-wide">{isOnline ? "ONLINE" : "OFFLINE"}</span>
         </div>
       </header>
 
-      <main className="flex-1 container mx-auto p-4 pb-28 md:pb-4">
+      <main className="flex-1 w-full max-w-md mx-auto px-4 pt-4 pb-28">
         {replayMessage && (
           <div className="mb-3 text-xs border border-slate-800 rounded bg-slate-900 px-3 py-2 text-slate-300">
             {replayMessage}
@@ -154,7 +151,7 @@ export default function Layout({ children }) {
         {children}
       </main>
 
-      <nav className="safe-bottom fixed bottom-0 left-0 right-0 bg-black border-t border-slate-800 p-3 grid grid-cols-3 md:hidden">
+      <nav className="safe-bottom fixed bottom-0 left-0 right-0 bg-black/80 backdrop-blur border-t border-white/10 p-3 grid grid-cols-3 md:hidden">
         <Link
           href="/"
           className="flex flex-col items-center gap-1 text-slate-400 hover:text-red-500"
@@ -180,3 +177,6 @@ export default function Layout({ children }) {
     </div>
   );
 }
+
+
+
