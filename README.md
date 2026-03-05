@@ -16,6 +16,7 @@ This repository is now optimized for a **mobile app-first** workflow (iOS/Androi
 - Ollama config: `backend/config/ollama_config.yaml`
 - Escalation/routing policy config: `backend/config/escalation_policy.yaml`
 - Synthetic knowledge base: `backend/knowledge_base/manuals/*.txt`
+- Structured playbooks: `backend/knowledge_base/synthetic/fault_playbooks.yaml`
 
 ## Install & Run Backend
 
@@ -128,12 +129,17 @@ The UI includes:
 - `GET /api/job/{job_id}/workflow`
 - `POST /api/job/{job_id}/workflow/step`
 - `POST /api/job/{job_id}/replan`
+- `POST /api/job/{job_id}/attachments`
+- `GET /api/job/{job_id}/attachments`
+- `GET /api/attachments/{attachment_id}/content`
 - `GET /api/supervisor/queue`
 - `GET /api/supervisor/alerts`
 - `POST /api/supervisor/approve`
 - `POST /api/jobs/check-timeouts`
 - `POST /api/sync`
 - `GET /api/job/{job_id}`
+- `GET /api/issues`
+- `GET /api/issues/{job_id}/similar`
 - `GET /api/metrics/agent-performance`
 - `GET /api/config/runtime`
 - `GET /api/health`
@@ -156,6 +162,12 @@ Free-text-first behavior:
 - `equipment_id` and `fault_code` are optional.
 - If omitted, backend infers values from text or falls back to `UNKNOWN_*`.
 - Mobile intake includes a voice input button with native iOS permissions flow.
+
+Image evidence behavior:
+- Technician can attach step-level images (`camera` or `gallery`) to a job.
+- Limits: up to 5 images per step, max 3MB each.
+- Supervisor queue includes attachment counts and supports in-app preview/download.
+- Offline mode queues attachment metadata + file-copy events for replay to `server.db` mirror.
 
 ## Guided Learning Flow (APEX v2)
 
@@ -286,6 +298,28 @@ curl -X POST http://127.0.0.1:9054/api/job/<JOB_ID>/workflow/step \
     "actor_id": "field_technician",
     "request_supervisor_review": true
   }'
+```
+
+## Attachment Upload Example
+
+```bash
+curl -X POST http://127.0.0.1:9054/api/job/<JOB_ID>/attachments \
+  -H "Content-Type: application/json" \
+  -d '{
+    "step_id": "step-1",
+    "source": "camera",
+    "filename": "coolant-leak.jpg",
+    "mime_type": "image/jpeg",
+    "image_base64": "<BASE64_IMAGE_BYTES>",
+    "caption": "Leak near upper hose clamp"
+  }'
+```
+
+## Issue History Search Example
+
+```bash
+curl "http://127.0.0.1:9054/api/issues?fault_code=P0217&limit=10"
+curl "http://127.0.0.1:9054/api/issues/<JOB_ID>/similar?limit=5"
 ```
 
 ## Manual Escalation Rule

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
 import re
+import shutil
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -12,6 +14,7 @@ from typing import Any, Literal
 import yaml
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from backend.agents import parts_agent, scheduler_agent, triage_agent
@@ -88,6 +91,10 @@ MODEL_SIZE_8B_PATTERN = re.compile(r"(?<!\d)8(?:\.\d+)?b(?!\d)", re.IGNORECASE)
 EQUIPMENT_ID_PATTERN = re.compile(r"\b(?:EQ[-_ ]?\d{2,}|[A-Z]{2,4}-\d{3,})\b", re.IGNORECASE)
 FAULT_CODE_PATTERN = re.compile(r"\b(?:[PBCU]\d{4}|[A-Z]{2,5}-\d{2,5}|[A-Z]\d{3,4})\b", re.IGNORECASE)
 NEGATION_TOKENS = {"no", "not", "never", "without", "none", "denies"}
+ALLOWED_IMAGE_MIME_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+MAX_ATTACHMENT_BYTES = 3 * 1024 * 1024
+MAX_ATTACHMENTS_PER_STEP = 5
+ISSUE_SEARCH_LIMIT_MAX = 100
 
 
 def _load_escalation_policy() -> dict[str, Any]:
@@ -269,6 +276,16 @@ class WorkflowStepUpdateRequest(BaseModel):
     request_supervisor_review: bool | None = False
 
 
+class AttachmentUploadRequest(BaseModel):
+    step_id: str
+    source: Literal["camera", "gallery"]
+    filename: str
+    mime_type: str
+    image_base64: str
+    caption: str | None = None
+    captured_ts: str | None = None
+
+
 app = FastAPI(title="Cummins Service Reboot Backend", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
@@ -282,6 +299,7 @@ app.add_middleware(
 @app.on_event("startup")
 def startup() -> None:
     db.init_db()
+    _ensure_evidence_dirs()
 
 
 def _utc_now() -> str:
@@ -309,6 +327,88 @@ def _approval_due_ts(base_ts: str, minutes: int = 30) -> str:
         "+00:00",
         "Z",
     )
+
+
+def _local_evidence_root() -> Path:
+    return db.LOCAL_DB_PATH.parent / "evidence" / "local"
+
+
+def _server_evidence_root() -> Path:
+    return db.SERVER_DB_PATH.parent / "evidence" / "server"
+
+
+def _ensure_evidence_dirs() -> None:
+    _local_evidence_root().mkdir(parents=True, exist_ok=True)
+    _server_evidence_root().mkdir(parents=True, exist_ok=True)
+
+
+def _clean_attachment_filename(filename: str, extension: str) -> str:
+    name = re.sub(r"[^a-zA-Z0-9._-]+", "_", str(filename or "").strip())
+    if not name:
+        name = f"attachment{extension}"
+    if "." not in name:
+        name = f"{name}{extension}"
+    return name
+
+
+def _attachment_local_path(job_id: str, attachment_id: str, extension: str) -> tuple[Path, str]:
+    rel = Path("evidence") / "local" / job_id / f"{attachment_id}{extension}"
+    abs_path = db.LOCAL_DB_PATH.parent / rel
+    abs_path.parent.mkdir(parents=True, exist_ok=True)
+    return abs_path, str(rel)
+
+
+def _attachment_server_path(job_id: str, attachment_id: str, extension: str) -> tuple[Path, str]:
+    rel = Path("evidence") / "server" / job_id / f"{attachment_id}{extension}"
+    abs_path = db.SERVER_DB_PATH.parent / rel
+    abs_path.parent.mkdir(parents=True, exist_ok=True)
+    return abs_path, str(rel)
+
+
+def _decode_image_payload(image_base64: str) -> bytes:
+    value = str(image_base64 or "").strip()
+    if "," in value and value.lower().startswith("data:"):
+        value = value.split(",", 1)[1]
+    try:
+        return base64.b64decode(value, validate=True)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"Invalid image_base64 payload: {exc}") from exc
+
+
+def _attachment_public_payload(item: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(item)
+    payload["content_url"] = f"/api/attachments/{item['attachment_id']}/content"
+    payload.pop("sync_error", None)
+    return payload
+
+
+def _copy_attachment_local_to_server(attachment: dict[str, Any]) -> dict[str, Any]:
+    attachment_id = str(attachment.get("attachment_id", "")).strip()
+    job_id = str(attachment.get("job_id", "")).strip()
+    local_rel_path = str(attachment.get("local_rel_path", "")).strip()
+    if not attachment_id or not job_id or not local_rel_path:
+        raise ValueError("Attachment payload missing attachment_id/job_id/local_rel_path")
+    local_abs = db.LOCAL_DB_PATH.parent / local_rel_path
+    if not local_abs.exists():
+        raise FileNotFoundError(f"Attachment file not found: {local_abs}")
+    suffix = local_abs.suffix or ".jpg"
+    server_abs, server_rel = _attachment_server_path(job_id, attachment_id, suffix)
+    shutil.copy2(local_abs, server_abs)
+    updated = dict(attachment)
+    updated["server_rel_path"] = server_rel
+    updated["sync_state"] = "synced"
+    updated["sync_error"] = ""
+    return updated
+
+
+def _issue_similarity_score(anchor_tokens: set[str], candidate_tokens: set[str]) -> float:
+    if not anchor_tokens or not candidate_tokens:
+        return 0.0
+    intersection = len(anchor_tokens.intersection(candidate_tokens))
+    union = len(anchor_tokens.union(candidate_tokens))
+    if union <= 0:
+        return 0.0
+    return intersection / union
 
 
 def _default_guided_answer(payload: dict[str, Any]) -> str:
@@ -1462,6 +1562,7 @@ def _queue_offline_events(
     workflow_events: list[dict[str, Any]] | None = None,
     metric_events: list[dict[str, Any]] | None = None,
     alert_events: list[dict[str, Any]] | None = None,
+    issue_attachments: list[dict[str, Any]] | None = None,
 ) -> None:
     for entry in log_entries:
         if not _is_escalation_log_entry(entry):
@@ -1517,6 +1618,25 @@ def _queue_offline_events(
             entity_id=f"{alert.get('job_id', 'global')}:{alert['alert_type']}",
             payload=alert,
         )
+    for attachment in issue_attachments or []:
+        db.enqueue_sync_event(
+            local_conn,
+            ts=str(attachment.get("created_ts", job_row["updated_ts"])),
+            entity="attachment_upsert",
+            entity_id=str(attachment.get("attachment_id")),
+            payload=attachment,
+        )
+        db.enqueue_sync_event(
+            local_conn,
+            ts=str(attachment.get("created_ts", job_row["updated_ts"])),
+            entity="attachment_file_copy",
+            entity_id=str(attachment.get("attachment_id")),
+            payload={
+                "attachment_id": attachment.get("attachment_id"),
+                "job_id": attachment.get("job_id"),
+                "local_rel_path": attachment.get("local_rel_path"),
+            },
+        )
 
 
 def _mirror_online_to_server(
@@ -1526,6 +1646,7 @@ def _mirror_online_to_server(
     workflow_events: list[dict[str, Any]] | None = None,
     metric_events: list[dict[str, Any]] | None = None,
     alert_events: list[dict[str, Any]] | None = None,
+    issue_attachments: list[dict[str, Any]] | None = None,
 ) -> None:
     with db.open_server_connection() as server_conn:
         for entry in log_entries:
@@ -1545,6 +1666,10 @@ def _mirror_online_to_server(
             db.apply_metric_event(server_conn, metric_event)
         for alert in alert_events or []:
             db.insert_supervisor_alert(server_conn, alert)
+        for attachment in issue_attachments or []:
+            copied = _copy_attachment_local_to_server(attachment)
+            db.upsert_issue_attachment(server_conn, copied)
+            db.refresh_issue_attachment_summary(server_conn, str(copied.get("job_id")))
         server_conn.commit()
 
 
@@ -2185,6 +2310,224 @@ def create_job(request: JobSubmitRequest) -> dict[str, Any]:
         return response_payload
 
 
+@app.post("/api/job/{job_id}/attachments")
+def upload_job_attachment(job_id: str, request: AttachmentUploadRequest) -> dict[str, Any]:
+    now = _utc_now()
+    mime_type = str(request.mime_type or "").strip().lower()
+    extension = ALLOWED_IMAGE_MIME_TYPES.get(mime_type)
+    if not extension:
+        raise HTTPException(status_code=422, detail="Unsupported mime_type. Allowed: image/jpeg, image/png, image/webp")
+
+    with db.open_local_connection() as local_conn:
+        job = db.get_job(local_conn, job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="job_id not found")
+        step = db.get_workflow_step(local_conn, job_id, request.step_id)
+        if not step:
+            raise HTTPException(status_code=404, detail="step_id not found")
+        attachment_count = db.count_job_step_attachments(local_conn, job_id, request.step_id)
+        if attachment_count >= MAX_ATTACHMENTS_PER_STEP:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Step already has {MAX_ATTACHMENTS_PER_STEP} images. Remove one before uploading more.",
+            )
+
+        image_bytes = _decode_image_payload(request.image_base64)
+        if not image_bytes:
+            raise HTTPException(status_code=422, detail="image_base64 decoded to empty payload")
+        if len(image_bytes) > MAX_ATTACHMENT_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Image too large. Max size is {MAX_ATTACHMENT_BYTES // (1024 * 1024)}MB.",
+            )
+
+        attachment_id = str(uuid.uuid4())
+        file_abs_path, local_rel_path = _attachment_local_path(job_id, attachment_id, extension)
+        file_abs_path.write_bytes(image_bytes)
+        sha256 = hashlib.sha256(image_bytes).hexdigest()
+
+        attachment = {
+            "attachment_id": attachment_id,
+            "job_id": job_id,
+            "step_id": request.step_id,
+            "created_ts": now,
+            "captured_ts": request.captured_ts or now,
+            "source": request.source,
+            "filename": _clean_attachment_filename(request.filename, extension),
+            "mime_type": mime_type,
+            "byte_size": len(image_bytes),
+            "sha256": sha256,
+            "caption": str(request.caption or "").strip() or None,
+            "local_rel_path": local_rel_path,
+            "server_rel_path": None,
+            "sync_state": "pending",
+            "sync_error": None,
+            "vision_features_json": {},
+        }
+        db.insert_issue_attachment(local_conn, attachment)
+        db.refresh_issue_attachment_summary(local_conn, job_id)
+
+        log_entry = _build_log_entry(
+            ts=now,
+            job_id=job_id,
+            agent_id="field_technician",
+            action="ATTACHMENT_ADDED",
+            input_json={
+                "step_id": request.step_id,
+                "source": request.source,
+                "filename": request.filename,
+                "mime_type": mime_type,
+                "byte_size": len(image_bytes),
+            },
+            output_json={
+                "attachment_id": attachment_id,
+                "sha256": sha256,
+                "local_rel_path": local_rel_path,
+            },
+            confidence=1.0,
+        )
+        db.insert_decision_log(local_conn, log_entry)
+
+        if _is_offline(False):
+            db.enqueue_sync_event(
+                local_conn,
+                ts=now,
+                entity="decision_log",
+                entity_id=f"{job_id}:field_technician:ATTACHMENT_ADDED:{attachment_id}",
+                payload=log_entry,
+            )
+            db.enqueue_sync_event(
+                local_conn,
+                ts=now,
+                entity="attachment_upsert",
+                entity_id=attachment_id,
+                payload=attachment,
+            )
+            db.enqueue_sync_event(
+                local_conn,
+                ts=now,
+                entity="attachment_file_copy",
+                entity_id=attachment_id,
+                payload={
+                    "attachment_id": attachment_id,
+                    "job_id": job_id,
+                    "local_rel_path": local_rel_path,
+                },
+            )
+        else:
+            copied = _copy_attachment_local_to_server(attachment)
+            db.upsert_issue_attachment(local_conn, copied)
+            db.refresh_issue_attachment_summary(local_conn, job_id)
+            with db.open_server_connection() as server_conn:
+                db.insert_decision_log(server_conn, log_entry)
+                db.upsert_issue_attachment(server_conn, copied)
+                db.refresh_issue_attachment_summary(server_conn, job_id)
+                server_conn.commit()
+            attachment = copied
+
+        local_conn.commit()
+        return {
+            "job_id": job_id,
+            "step_id": request.step_id,
+            "attachment": _attachment_public_payload(attachment),
+        }
+
+
+@app.get("/api/job/{job_id}/attachments")
+def get_job_attachments(job_id: str) -> dict[str, Any]:
+    with db.open_local_connection() as local_conn:
+        job = db.get_job(local_conn, job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="job_id not found")
+        attachments = [_attachment_public_payload(item) for item in db.get_job_attachments(local_conn, job_id)]
+        return {"job_id": job_id, "count": len(attachments), "attachments": attachments}
+
+
+@app.get("/api/attachments/{attachment_id}/content")
+def get_attachment_content(attachment_id: str) -> FileResponse:
+    with db.open_local_connection() as local_conn:
+        attachment = db.get_attachment(local_conn, attachment_id)
+        if not attachment:
+            raise HTTPException(status_code=404, detail="attachment_id not found")
+    local_rel_path = str(attachment.get("local_rel_path", "")).strip()
+    if not local_rel_path:
+        raise HTTPException(status_code=404, detail="attachment missing local file path")
+    abs_path = db.LOCAL_DB_PATH.parent / local_rel_path
+    if not abs_path.exists():
+        raise HTTPException(status_code=404, detail="attachment file not found")
+    return FileResponse(
+        path=str(abs_path),
+        media_type=str(attachment.get("mime_type") or "application/octet-stream"),
+        filename=str(attachment.get("filename") or abs_path.name),
+    )
+
+
+@app.get("/api/issues")
+def get_issue_history(
+    q: str | None = None,
+    equipment_id: str | None = None,
+    fault_code: str | None = None,
+    location: str | None = None,
+    status: str | None = None,
+    workflow_mode: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 25,
+    offset: int = 0,
+) -> dict[str, Any]:
+    limit = max(1, min(ISSUE_SEARCH_LIMIT_MAX, int(limit)))
+    offset = max(0, int(offset))
+    with db.open_local_connection() as local_conn:
+        issues = db.search_issue_records(
+            local_conn,
+            q=q,
+            equipment_id=equipment_id,
+            fault_code=fault_code,
+            location=location,
+            status=status,
+            workflow_mode=workflow_mode,
+            date_from=date_from,
+            date_to=date_to,
+            limit=limit,
+            offset=offset,
+        )
+        return {"count": len(issues), "issues": issues, "limit": limit, "offset": offset}
+
+
+@app.get("/api/issues/{job_id}/similar")
+def get_similar_issues(job_id: str, limit: int = 5) -> dict[str, Any]:
+    limit = max(1, min(20, int(limit)))
+    with db.open_local_connection() as local_conn:
+        anchor = db.get_issue_record(local_conn, job_id)
+        if not anchor:
+            raise HTTPException(status_code=404, detail="job_id not found in issue history")
+        candidates = db.search_issue_records(local_conn, limit=ISSUE_SEARCH_LIMIT_MAX, offset=0)
+        anchor_tokens = set(str(token) for token in anchor.get("tags_json", []))
+        scored: list[dict[str, Any]] = []
+        for candidate in candidates:
+            if candidate.get("job_id") == job_id:
+                continue
+            candidate_tokens = set(str(token) for token in candidate.get("tags_json", []))
+            score = _issue_similarity_score(anchor_tokens, candidate_tokens)
+            if score <= 0:
+                continue
+            scored.append(
+                {
+                    "score": round(score, 4),
+                    "job_id": candidate.get("job_id"),
+                    "status": candidate.get("status"),
+                    "workflow_mode": candidate.get("workflow_mode"),
+                    "equipment_id": candidate.get("equipment_id"),
+                    "fault_code": candidate.get("fault_code"),
+                    "issue_text": candidate.get("issue_text"),
+                    "updated_ts": candidate.get("updated_ts"),
+                    "attachment_count": int(candidate.get("attachment_count", 0)),
+                }
+            )
+        scored.sort(key=lambda item: (float(item["score"]), str(item.get("updated_ts", ""))), reverse=True)
+        return {"job_id": job_id, "count": len(scored[:limit]), "similar_issues": scored[:limit]}
+
+
 @app.get("/api/supervisor/queue")
 def get_supervisor_queue() -> dict[str, Any]:
     with db.open_local_connection() as local_conn:
@@ -2494,10 +2837,25 @@ def sync_to_server() -> dict[str, Any]:
                     )
                 elif entity == "workflow_event":
                     db.insert_workflow_event(server_conn, payload)
-                elif entity == "metric_event":
+                elif entity in {"metric_event", "agent_metric"}:
                     db.apply_metric_event(server_conn, payload)
                 elif entity == "supervisor_alert":
                     db.insert_supervisor_alert(server_conn, payload)
+                elif entity == "attachment_upsert":
+                    db.upsert_issue_attachment(server_conn, payload)
+                    db.refresh_issue_attachment_summary(server_conn, str(payload.get("job_id", "")))
+                elif entity == "attachment_file_copy":
+                    attachment_id = str(payload.get("attachment_id", ""))
+                    if not attachment_id:
+                        raise ValueError("attachment_file_copy missing attachment_id")
+                    attachment = db.get_attachment(local_conn, attachment_id)
+                    if not attachment:
+                        raise ValueError(f"attachment_id not found: {attachment_id}")
+                    copied = _copy_attachment_local_to_server(attachment)
+                    db.upsert_issue_attachment(local_conn, copied)
+                    db.refresh_issue_attachment_summary(local_conn, str(copied.get("job_id", "")))
+                    db.upsert_issue_attachment(server_conn, copied)
+                    db.refresh_issue_attachment_summary(server_conn, str(copied.get("job_id", "")))
                 else:
                     raise ValueError(f"Unsupported sync entity '{entity}'")
                 db.mark_sync_event_synced(local_conn, int(event["id"]))
@@ -2572,6 +2930,7 @@ def get_job(job_id: str) -> dict[str, Any]:
         if not data:
             raise HTTPException(status_code=404, detail="job_id not found")
         data["job"] = _normalize_final_response(data["job"])
+        data["attachments"] = [_attachment_public_payload(item) for item in data.get("attachments", [])]
         return data
 
 

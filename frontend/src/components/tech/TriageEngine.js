@@ -3,11 +3,14 @@ import { Mic } from "lucide-react";
 import { SpeechRecognition } from "@capacitor-community/speech-recognition";
 import {
   getDemoScenarios,
+  getApiBaseUrl,
+  getJobAttachments,
   getJobDetails,
   getJobTimeline,
   getWorkflow,
   replanJob,
   submitJob,
+  uploadJobAttachment,
   updateWorkflowStep,
 } from "../../lib/api";
 
@@ -64,6 +67,29 @@ function toFriendlyRisk(riskLevel) {
   return "Low risk";
 }
 
+function toGroupedAttachments(attachments) {
+  const grouped = {};
+  for (const item of attachments || []) {
+    const stepId = String(item?.step_id || "unassigned");
+    if (!grouped[stepId]) grouped[stepId] = [];
+    grouped[stepId].push(item);
+  }
+  return grouped;
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const value = String(reader.result || "");
+      const base64Payload = value.includes(",") ? value.split(",", 2)[1] : value;
+      resolve(base64Payload);
+    };
+    reader.onerror = () => reject(new Error("Failed to read image file."));
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function TriageEngine() {
   const [form, setForm] = useState(defaultForm);
   const [result, setResult] = useState(null);
@@ -81,6 +107,9 @@ export default function TriageEngine() {
   const [stepNotes, setStepNotes] = useState({});
   const [stepMeasurements, setStepMeasurements] = useState({});
   const [stepManualEscalation, setStepManualEscalation] = useState({});
+  const [attachmentsByStep, setAttachmentsByStep] = useState({});
+  const [attachmentCaptionByStep, setAttachmentCaptionByStep] = useState({});
+  const [uploadingAttachmentStepId, setUploadingAttachmentStepId] = useState("");
   const [updatingStepId, setUpdatingStepId] = useState("");
   const [speechSupported, setSpeechSupported] = useState(false);
   const [listening, setListening] = useState(false);
@@ -107,6 +136,14 @@ export default function TriageEngine() {
     }
     return "You can continue with the repair checklist below.";
   }, [result]);
+  const maxAttachmentBytes = 3 * 1024 * 1024;
+
+  function toAttachmentUrl(contentUrl) {
+    const raw = String(contentUrl || "").trim();
+    if (!raw) return "";
+    if (raw.startsWith("http://") || raw.startsWith("https://")) return raw;
+    return `${getApiBaseUrl()}${raw}`;
+  }
 
   useEffect(() => {
     async function loadScenarios() {
@@ -302,12 +339,14 @@ export default function TriageEngine() {
     setError("");
     setJobDetails(null);
     setTimeline([]);
+    setAttachmentsByStep({});
     try {
       const data = await submitJob(form);
       if (data?.queued_offline && data?.local_only) {
         setResult(data);
         setWorkflowSteps(data.initial_workflow || []);
         setWorkflowEvents([]);
+        setAttachmentsByStep({});
         return;
       }
       if (data?.queued_offline) {
@@ -362,11 +401,13 @@ export default function TriageEngine() {
         });
         setWorkflowSteps([]);
         setWorkflowEvents([]);
+        setAttachmentsByStep({});
         return;
       }
       setResult(data);
       setWorkflowSteps(data.initial_workflow || []);
       setWorkflowEvents([]);
+      setAttachmentsByStep({});
     } catch (submitError) {
       setError(submitError.message);
     } finally {
@@ -392,6 +433,7 @@ export default function TriageEngine() {
       }
       setWorkflowSteps(data.workflow_steps || []);
       setWorkflowEvents(data.workflow_events || []);
+      setAttachmentsByStep(toGroupedAttachments(data.attachments || []));
       await loadTimeline(createdJobId);
     } catch (detailsError) {
       setError(detailsError.message);
@@ -436,6 +478,71 @@ export default function TriageEngine() {
     }
   }
 
+  async function loadAttachments(jobId) {
+    if (!jobId) return;
+    try {
+      const data = await getJobAttachments(jobId);
+      setAttachmentsByStep(toGroupedAttachments(data.attachments || []));
+    } catch (attachmentError) {
+      setError(attachmentError.message);
+    }
+  }
+
+  async function handleAttachmentSelection(stepId, source, event) {
+    const file = event?.target?.files?.[0];
+    event.target.value = "";
+    if (!file || !createdJobId) return;
+    if (file.size > maxAttachmentBytes) {
+      setError("Image too large. Max upload size is 3MB.");
+      return;
+    }
+    setUploadingAttachmentStepId(stepId);
+    setError("");
+    try {
+      const payload = {
+        step_id: stepId,
+        source,
+        filename: file.name || `attachment-${Date.now()}.jpg`,
+        mime_type: file.type || "image/jpeg",
+        image_base64: await fileToBase64(file),
+        caption: attachmentCaptionByStep[stepId] || "",
+        captured_ts: new Date().toISOString(),
+      };
+      const response = await uploadJobAttachment(createdJobId, payload);
+      if (response?.queued_offline) {
+        setAttachmentsByStep((prev) => {
+          const next = { ...prev };
+          const queuedItem = {
+            attachment_id: `queued-${Date.now()}`,
+            step_id: stepId,
+            filename: payload.filename,
+            mime_type: payload.mime_type,
+            caption: payload.caption,
+            content_url: "",
+            sync_state: "queued_offline",
+            created_ts: new Date().toISOString(),
+          };
+          next[stepId] = [queuedItem, ...(next[stepId] || [])];
+          return next;
+        });
+      } else if (response?.attachment) {
+        setAttachmentsByStep((prev) => {
+          const next = { ...prev };
+          next[stepId] = [response.attachment, ...(next[stepId] || [])];
+          return next;
+        });
+      } else {
+        await loadAttachments(createdJobId);
+      }
+      setAttachmentCaptionByStep((prev) => ({ ...prev, [stepId]: "" }));
+      await loadTimeline(createdJobId);
+    } catch (uploadError) {
+      setError(uploadError.message);
+    } finally {
+      setUploadingAttachmentStepId("");
+    }
+  }
+
   async function refreshWorkflow() {
     if (!createdJobId) return;
     setLoadingWorkflow(true);
@@ -467,6 +574,7 @@ export default function TriageEngine() {
             }
           : prev,
       );
+      await loadAttachments(createdJobId);
     } catch (workflowError) {
       setError(workflowError.message);
     } finally {
@@ -511,6 +619,7 @@ export default function TriageEngine() {
             }
           : prev,
       );
+      await loadAttachments(createdJobId);
       await refreshWorkflow();
       await loadTimeline(createdJobId);
     } catch (stepError) {
@@ -1043,6 +1152,17 @@ export default function TriageEngine() {
                     placeholder="What you observed (optional)"
                     className="bg-black border border-slate-700 p-2 rounded text-sm"
                   />
+                  <input
+                    value={attachmentCaptionByStep[step.step_id] || ""}
+                    onChange={(event) =>
+                      setAttachmentCaptionByStep((prev) => ({
+                        ...prev,
+                        [step.step_id]: event.target.value,
+                      }))
+                    }
+                    placeholder="Photo caption (optional)"
+                    className="bg-black border border-slate-700 p-2 rounded text-sm"
+                  />
                   <label className="flex items-center gap-2 text-xs text-slate-300 p-2">
                     <input
                       type="checkbox"
@@ -1056,7 +1176,64 @@ export default function TriageEngine() {
                     />
                     Ask supervisor to review this step
                   </label>
+                  <div className="flex flex-wrap gap-2 items-center p-2">
+                    <label className="bg-sky-700 hover:bg-sky-600 px-3 py-1 rounded text-xs font-semibold cursor-pointer">
+                      Take Photo
+                      <input
+                        type="file"
+                        accept="image/*"
+                        capture="environment"
+                        className="hidden"
+                        disabled={uploadingAttachmentStepId === step.step_id || !createdJobId}
+                        onChange={(event) => handleAttachmentSelection(step.step_id, "camera", event)}
+                      />
+                    </label>
+                    <label className="bg-indigo-700 hover:bg-indigo-600 px-3 py-1 rounded text-xs font-semibold cursor-pointer">
+                      Upload Image
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        disabled={uploadingAttachmentStepId === step.step_id || !createdJobId}
+                        onChange={(event) => handleAttachmentSelection(step.step_id, "gallery", event)}
+                      />
+                    </label>
+                    {uploadingAttachmentStepId === step.step_id && (
+                      <span className="text-xs text-slate-400">Uploading image...</span>
+                    )}
+                  </div>
                 </div>
+                {(attachmentsByStep[step.step_id] || []).length > 0 && (
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    {(attachmentsByStep[step.step_id] || []).map((item) => (
+                      <div
+                        key={`${item.attachment_id}-${item.created_ts || ""}`}
+                        className="bg-black/40 border border-slate-800 rounded p-2 text-xs space-y-1"
+                      >
+                        {item.content_url ? (
+                          <a
+                            href={toAttachmentUrl(item.content_url)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="block"
+                          >
+                            <img
+                              src={toAttachmentUrl(item.content_url)}
+                              alt={item.caption || item.filename || "Attachment"}
+                              className="w-full h-24 object-cover rounded border border-slate-700"
+                            />
+                          </a>
+                        ) : (
+                          <div className="w-full h-24 rounded border border-slate-700 bg-slate-900 flex items-center justify-center text-slate-500">
+                            queued
+                          </div>
+                        )}
+                        <div className="truncate text-slate-300">{item.filename || "attachment"}</div>
+                        <div className="truncate text-slate-500">{item.caption || "No caption"}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div className="flex gap-2">
                   <button
                     disabled={updatingStepId === step.step_id}

@@ -1,0 +1,7 @@
+Electrical Fault Isolation Notes (Synthetic)
+
+For intermittent sensor faults, perform wiggle-test on harness branch while monitoring live data stream and freeze-frame recurrence.
+
+For repeated low-voltage events, check alternator output under load and voltage drop across starter relay path.
+
+Always record connector pin condition and grounding integrity before module replacement.

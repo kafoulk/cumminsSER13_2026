@@ -1,0 +1,64 @@
+playbooks:
+  - playbook_id: cooling_p0217
+    fault_family: cooling_overtemp
+    aliases: ["P0217", "overtemp", "engine temp high", "coolant leak"]
+    keywords: ["coolant", "radiator", "thermostat", "fan clutch", "overheat"]
+    likely_causes:
+      - Coolant flow restriction
+      - Thermostat regulation drift
+      - Fan clutch engagement fault
+    diagnostic_steps:
+      - Confirm coolant level and pressure hold with thermal cycle.
+      - Verify fan clutch response during elevated temperature command.
+      - Inspect thermostat and radiator airflow path for obstruction.
+    recommended_parts: ["Thermostat", "Fan clutch", "Coolant hose set", "Water pump"]
+    risk_notes:
+      - If active overheating persists, hold release and escalate supervisor review.
+
+  - playbook_id: brake_brk404
+    fault_family: brake_warning_smoke
+    aliases: ["BRK-404", "brake warning", "brake smoke", "wheel end hot"]
+    keywords: ["brake", "smoke", "pressure", "abs", "hazard"]
+    likely_causes:
+      - Brake pressure instability
+      - ABS module or sensor fault
+      - Hydraulic restriction at line segment
+    diagnostic_steps:
+      - Isolate equipment and document wheel-end temperature delta.
+      - Validate brake pressure stability against spec.
+      - Run ABS diagnostics and inspect harness/connector integrity.
+    recommended_parts: ["Brake pressure sensor", "ABS module", "Brake line kit"]
+    risk_notes:
+      - Any smoke/hazard signal requires supervisor approval before release.
+
+  - playbook_id: fuel_low_power
+    fault_family: fuel_delivery_low_power
+    aliases: ["fuel low pressure", "loss of power", "hard start"]
+    keywords: ["fuel", "injector", "rail", "filter", "power loss"]
+    likely_causes:
+      - Supply-side restriction
+      - Injector electrical/intermittent command fault
+      - Rail pressure control drift
+    diagnostic_steps:
+      - Measure supply and rail pressure under load profile.
+      - Inspect injector harness continuity and connector retention.
+      - Confirm filter condition and air ingress at priming circuit.
+    recommended_parts: ["Fuel filter", "Injector harness", "Injector set", "High-pressure fuel pump"]
+    risk_notes:
+      - Escalate if unstable rail pressure persists after baseline checks.
+
+  - playbook_id: electrical_low_voltage
+    fault_family: electrical_voltage_drop
+    aliases: ["low voltage", "starter drop", "electrical intermittent"]
+    keywords: ["battery", "starter", "alternator", "voltage", "ground"]
+    likely_causes:
+      - Alternator output degradation
+      - Starter relay path voltage drop
+      - Grounding continuity fault
+    diagnostic_steps:
+      - Capture loaded charging voltage and starter path drop.
+      - Inspect relay, terminals, and chassis ground points.
+      - Re-test fault recurrence after corrective cleanup.
+    recommended_parts: ["Starter relay", "Alternator belt", "Battery"]
+    risk_notes:
+      - Supervisor sign-off recommended when electrical instability affects safety systems.

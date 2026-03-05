@@ -3,10 +3,13 @@ import {
   getApiBaseUrl as getApiBaseUrlFromSettings,
   getAppMode,
   getDefaultApiBaseUrl,
+  getInferredApiBaseUrl,
+  setApiBaseUrl as persistApiBaseUrl,
 } from "./appSettings";
 import { getLocalRuntimeConfig, runLocalOfflineJob } from "./localOfflineInference";
 import {
   getQueueCount,
+  getQueuedRequests,
   OFFLINE_QUEUE_EVENT,
   queueRequest,
   replayQueuedRequests,
@@ -16,6 +19,28 @@ const API_BASE_URL = getDefaultApiBaseUrl();
 
 function getResolvedApiBaseUrl() {
   return getApiBaseUrlFromSettings();
+}
+
+function normalizeBaseUrl(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\/+$/, "");
+}
+
+function appendUniqueUrl(urls, candidate) {
+  const normalized = normalizeBaseUrl(candidate);
+  if (!normalized) return;
+  if (urls.includes(normalized)) return;
+  urls.push(normalized);
+}
+
+function buildApiBaseCandidates(preferredBaseUrl) {
+  const candidates = [];
+  appendUniqueUrl(candidates, preferredBaseUrl);
+  appendUniqueUrl(candidates, getInferredApiBaseUrl());
+  appendUniqueUrl(candidates, API_BASE_URL);
+  appendUniqueUrl(candidates, "http://127.0.0.1:9054");
+  return candidates;
 }
 
 function createClientJobId() {
@@ -63,24 +88,44 @@ async function queueOfflineRequest(path, method, body, reason) {
 
 async function request(path, { method = "GET", body, allowQueue = true } = {}) {
   const normalizedMethod = String(method || "GET").toUpperCase();
-  const baseUrl = getResolvedApiBaseUrl();
+  const preferredBaseUrl = getResolvedApiBaseUrl();
+  const candidateBaseUrls = buildApiBaseCandidates(preferredBaseUrl);
 
   if (shouldQueue(normalizedMethod, allowQueue) && isBrowserOffline()) {
     return queueOfflineRequest(path, normalizedMethod, body, "browser_offline");
   }
 
-  let response;
-  try {
-    response = await fetch(`${baseUrl}${path}`, {
-      method: normalizedMethod,
-      headers: { "Content-Type": "application/json" },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-  } catch (error) {
-    if (shouldQueue(normalizedMethod, allowQueue) && isNetworkError(error)) {
+  let response = null;
+  let lastError = null;
+  let selectedBaseUrl = normalizeBaseUrl(preferredBaseUrl);
+
+  for (const candidate of candidateBaseUrls) {
+    selectedBaseUrl = candidate;
+    try {
+      response = await fetch(`${candidate}${path}`, {
+        method: normalizedMethod,
+        headers: { "Content-Type": "application/json" },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      lastError = null;
+      break;
+    } catch (error) {
+      lastError = error;
+      if (!isNetworkError(error)) {
+        break;
+      }
+    }
+  }
+
+  if (!response) {
+    if (shouldQueue(normalizedMethod, allowQueue) && isNetworkError(lastError)) {
       return queueOfflineRequest(path, normalizedMethod, body, "network_error");
     }
-    throw error;
+    throw lastError || new Error("Request failed");
+  }
+
+  if (selectedBaseUrl && normalizeBaseUrl(selectedBaseUrl) !== normalizeBaseUrl(preferredBaseUrl)) {
+    persistApiBaseUrl(selectedBaseUrl);
   }
 
   const text = await response.text();
@@ -124,8 +169,87 @@ export function getJobTimeline(jobId) {
   return request(`/api/job/${jobId}/timeline`);
 }
 
-export function getSupervisorQueue() {
-  return request("/api/supervisor/queue");
+async function getSupervisorQueueFallback() {
+  const queued = await getQueuedRequests();
+  const pendingByJobId = new Map();
+
+  for (const item of queued) {
+    const method = String(item?.method || "").toUpperCase();
+    if (method !== "POST" || item?.path !== "/api/job") {
+      continue;
+    }
+
+    const payload = item?.body || {};
+    const queuedAt = item?.ts || new Date().toISOString();
+    const predicted = runLocalOfflineJob(
+      {
+        ...payload,
+        job_id: payload?.job_id || `queued-${item.id}`,
+        is_offline: true,
+      },
+      { queue_id: item.id, queued_at: queuedAt }
+    );
+
+    if (!predicted?.requires_approval) {
+      continue;
+    }
+
+    const jobId = predicted?.job_id || payload?.job_id || `queued-${item.id}`;
+    pendingByJobId.set(jobId, {
+      job_id: jobId,
+      updated_ts: queuedAt,
+      status: "PENDING_APPROVAL",
+      requires_approval: 1,
+      workflow_mode: predicted?.workflow_mode || "INVESTIGATION_ONLY",
+      workflow_intent:
+        predicted?.workflow_intent ||
+        "Collect additional evidence for supervisor decision. Repair guidance suppressed.",
+      escalation_reasons: predicted?.escalation_reasons || ["queued_offline_client"],
+      risk_signals: predicted?.risk_signals || {},
+      approval_due_ts: null,
+      timed_out: 0,
+      equipment_id: payload?.equipment_id || "UNKNOWN_EQUIPMENT",
+      fault_code: payload?.fault_code || "UNKNOWN_FAULT",
+      symptoms: payload?.symptoms || payload?.issue_text || payload?.notes || "",
+      location: payload?.location || null,
+      high_risk_failed_steps: 0,
+      attachment_count: 0,
+      latest_attachment_ts: null,
+      queued_offline: true,
+      queue_id: item.id,
+    });
+  }
+
+  const jobs = Array.from(pendingByJobId.values()).sort((a, b) => {
+    const left = Date.parse(a.updated_ts || "") || 0;
+    const right = Date.parse(b.updated_ts || "") || 0;
+    return right - left;
+  });
+
+  return {
+    count: jobs.length,
+    jobs,
+    local_only: true,
+    detail: "Backend unreachable. Showing on-device queued supervisor items.",
+  };
+}
+
+export async function getSupervisorQueue() {
+  try {
+    return await request("/api/supervisor/queue", { allowQueue: false });
+  } catch (error) {
+    if (!isNetworkError(error)) {
+      throw error;
+    }
+    const fallback = await getSupervisorQueueFallback();
+    if (fallback.count > 0) {
+      return fallback;
+    }
+    const baseUrl = getResolvedApiBaseUrl();
+    throw new Error(
+      `Load failed. Could not reach backend at ${baseUrl}. Set Settings > Backend Base URL to your laptop IP (http://<LAN-IP>:9054).`
+    );
+  }
 }
 
 export function approveJob(payload) {
@@ -138,6 +262,17 @@ export function syncOfflineQueue() {
 
 export function getWorkflow(jobId) {
   return request(`/api/job/${jobId}/workflow`);
+}
+
+export function uploadJobAttachment(jobId, payload) {
+  return request(`/api/job/${jobId}/attachments`, {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export function getJobAttachments(jobId) {
+  return request(`/api/job/${jobId}/attachments`);
 }
 
 export function updateWorkflowStep(jobId, payload) {
@@ -154,6 +289,21 @@ export function replanJob(jobId) {
 export function getAgentMetrics(day) {
   const query = day ? `?day=${encodeURIComponent(day)}` : "";
   return request(`/api/metrics/agent-performance${query}`);
+}
+
+export function getIssueHistory(params = {}) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === null || value === undefined || value === "") return;
+    query.set(key, String(value));
+  });
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request(`/api/issues${suffix}`);
+}
+
+export function getSimilarIssues(jobId, limit = 5) {
+  const suffix = Number.isFinite(Number(limit)) ? `?limit=${Math.max(1, Number(limit))}` : "";
+  return request(`/api/issues/${jobId}/similar${suffix}`);
 }
 
 export function getDemoScenarios() {

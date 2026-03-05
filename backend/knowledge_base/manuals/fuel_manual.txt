@@ -1,0 +1,7 @@
+Fuel System Service Notes (Synthetic)
+
+For low-power complaints under load, verify supply pressure at spec before injector replacement.
+
+If hard-start is reported, capture cranking RPM, battery voltage sag, and rail pressure rise profile.
+
+When filters are recently serviced, inspect for air ingress at seals and priming circuit fittings.

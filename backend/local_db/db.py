@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -153,6 +154,93 @@ def create_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS issue_records(
+            issue_id TEXT PRIMARY KEY,
+            job_id TEXT UNIQUE,
+            created_ts TEXT,
+            updated_ts TEXT,
+            status TEXT,
+            workflow_mode TEXT,
+            equipment_id TEXT,
+            fault_code TEXT,
+            issue_text TEXT,
+            symptoms TEXT,
+            notes TEXT,
+            location TEXT,
+            requires_approval INTEGER,
+            escalation_reasons_json TEXT,
+            tags_json TEXT,
+            attachment_count INTEGER DEFAULT 0,
+            latest_attachment_ts TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_issue_records_status_updated
+        ON issue_records(status, updated_ts)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_issue_records_equipment_fault
+        ON issue_records(equipment_id, fault_code)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_issue_records_location
+        ON issue_records(location)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_issue_records_updated
+        ON issue_records(updated_ts)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS issue_attachments(
+            attachment_id TEXT PRIMARY KEY,
+            job_id TEXT,
+            step_id TEXT,
+            created_ts TEXT,
+            captured_ts TEXT,
+            source TEXT,
+            filename TEXT,
+            mime_type TEXT,
+            byte_size INTEGER,
+            sha256 TEXT,
+            caption TEXT,
+            local_rel_path TEXT,
+            server_rel_path TEXT,
+            sync_state TEXT,
+            sync_error TEXT,
+            vision_features_json TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_issue_attachments_job_created
+        ON issue_attachments(job_id, created_ts)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_issue_attachments_step_id
+        ON issue_attachments(step_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_issue_attachments_sha256
+        ON issue_attachments(sha256)
+        """
+    )
     _ensure_column(conn, "jobs", "guided_question", "TEXT")
     _ensure_column(conn, "jobs", "guided_answer", "TEXT")
     _ensure_column(conn, "jobs", "approval_due_ts", "TEXT")
@@ -165,6 +253,14 @@ def create_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "workflow_steps", "recommended_parts_json", "TEXT")
     _ensure_column(conn, "workflow_steps", "step_kind", "TEXT")
     _ensure_column(conn, "workflow_steps", "suppressed", "INTEGER DEFAULT 0")
+    _ensure_column(conn, "issue_records", "attachment_count", "INTEGER DEFAULT 0")
+    _ensure_column(conn, "issue_records", "latest_attachment_ts", "TEXT")
+    _ensure_column(conn, "issue_attachments", "captured_ts", "TEXT")
+    _ensure_column(conn, "issue_attachments", "source", "TEXT")
+    _ensure_column(conn, "issue_attachments", "server_rel_path", "TEXT")
+    _ensure_column(conn, "issue_attachments", "sync_state", "TEXT")
+    _ensure_column(conn, "issue_attachments", "sync_error", "TEXT")
+    _ensure_column(conn, "issue_attachments", "vision_features_json", "TEXT")
 
 
 def _ensure_column(conn: sqlite3.Connection, table_name: str, column_name: str, column_def: str) -> None:
@@ -196,6 +292,110 @@ def _parse_json(value: Any) -> Any:
 
 def _clamp_confidence(confidence: float) -> float:
     return max(0.0, min(1.0, float(confidence)))
+
+
+def _tokenize_tags(*values: str) -> list[str]:
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        for token in re.findall(r"[a-zA-Z0-9_-]+", str(value or "").lower()):
+            if len(token) < 3:
+                continue
+            if token in seen:
+                continue
+            seen.add(token)
+            tokens.append(token)
+    return tokens[:40]
+
+
+def _build_issue_record_from_job(job: dict[str, Any]) -> dict[str, Any]:
+    payload = _parse_json(job.get("field_payload_json")) or {}
+    final = _parse_json(job.get("final_response_json")) or {}
+    escalation_reasons = final.get("escalation_reasons", [])
+    if not isinstance(escalation_reasons, list):
+        escalation_reasons = []
+
+    tags = _tokenize_tags(
+        str(payload.get("fault_code", "")),
+        str(payload.get("equipment_id", "")),
+        str(payload.get("issue_text", "")),
+        str(payload.get("symptoms", "")),
+        str(payload.get("notes", "")),
+        " ".join(str(item) for item in escalation_reasons),
+    )
+
+    return {
+        "issue_id": str(job.get("job_id", "")),
+        "job_id": str(job.get("job_id", "")),
+        "created_ts": job.get("created_ts"),
+        "updated_ts": job.get("updated_ts"),
+        "status": job.get("status"),
+        "workflow_mode": job.get("workflow_mode") or final.get("workflow_mode"),
+        "equipment_id": payload.get("equipment_id"),
+        "fault_code": payload.get("fault_code"),
+        "issue_text": payload.get("issue_text"),
+        "symptoms": payload.get("symptoms"),
+        "notes": payload.get("notes"),
+        "location": payload.get("location"),
+        "requires_approval": int(job.get("requires_approval", 0)),
+        "escalation_reasons_json": escalation_reasons,
+        "tags_json": tags,
+    }
+
+
+def upsert_issue_record(conn: sqlite3.Connection, record: dict[str, Any]) -> None:
+    existing = conn.execute(
+        "SELECT attachment_count, latest_attachment_ts FROM issue_records WHERE issue_id = ?",
+        (record["issue_id"],),
+    ).fetchone()
+    attachment_count = int(existing["attachment_count"]) if existing else int(record.get("attachment_count", 0) or 0)
+    latest_attachment_ts = existing["latest_attachment_ts"] if existing else record.get("latest_attachment_ts")
+
+    conn.execute(
+        """
+        INSERT INTO issue_records(
+            issue_id, job_id, created_ts, updated_ts, status, workflow_mode,
+            equipment_id, fault_code, issue_text, symptoms, notes, location,
+            requires_approval, escalation_reasons_json, tags_json, attachment_count, latest_attachment_ts
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(issue_id) DO UPDATE SET
+            job_id=excluded.job_id,
+            created_ts=excluded.created_ts,
+            updated_ts=excluded.updated_ts,
+            status=excluded.status,
+            workflow_mode=excluded.workflow_mode,
+            equipment_id=excluded.equipment_id,
+            fault_code=excluded.fault_code,
+            issue_text=excluded.issue_text,
+            symptoms=excluded.symptoms,
+            notes=excluded.notes,
+            location=excluded.location,
+            requires_approval=excluded.requires_approval,
+            escalation_reasons_json=excluded.escalation_reasons_json,
+            tags_json=excluded.tags_json,
+            attachment_count=excluded.attachment_count,
+            latest_attachment_ts=excluded.latest_attachment_ts
+        """,
+        (
+            record["issue_id"],
+            record["job_id"],
+            record.get("created_ts"),
+            record.get("updated_ts"),
+            record.get("status"),
+            record.get("workflow_mode"),
+            record.get("equipment_id"),
+            record.get("fault_code"),
+            record.get("issue_text"),
+            record.get("symptoms"),
+            record.get("notes"),
+            record.get("location"),
+            int(record.get("requires_approval", 0)),
+            _to_json(record.get("escalation_reasons_json", [])),
+            _to_json(record.get("tags_json", [])),
+            int(record.get("attachment_count", attachment_count)),
+            record.get("latest_attachment_ts", latest_attachment_ts),
+        ),
+    )
 
 
 def upsert_job(conn: sqlite3.Connection, job: dict[str, Any]) -> None:
@@ -243,6 +443,8 @@ def upsert_job(conn: sqlite3.Connection, job: dict[str, Any]) -> None:
             job.get("workflow_mode"),
         ),
     )
+    issue_record = _build_issue_record_from_job(job)
+    upsert_issue_record(conn, issue_record)
 
 
 def upsert_job_lww(conn: sqlite3.Connection, job: dict[str, Any]) -> bool:
@@ -264,6 +466,232 @@ def get_job(conn: sqlite3.Connection, job_id: str) -> dict[str, Any] | None:
     data["field_payload_json"] = _parse_json(data.get("field_payload_json"))
     data["final_response_json"] = _parse_json(data.get("final_response_json"))
     return data
+
+
+def _parse_issue_record_row(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+    item = dict(row)
+    item["requires_approval"] = int(item.get("requires_approval", 0))
+    item["attachment_count"] = int(item.get("attachment_count", 0))
+    item["escalation_reasons_json"] = _parse_json(item.get("escalation_reasons_json")) or []
+    item["tags_json"] = _parse_json(item.get("tags_json")) or []
+    return item
+
+
+def get_issue_record(conn: sqlite3.Connection, job_id: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM issue_records WHERE job_id = ?",
+        (job_id,),
+    ).fetchone()
+    if not row:
+        return None
+    return _parse_issue_record_row(row)
+
+
+def search_issue_records(
+    conn: sqlite3.Connection,
+    *,
+    q: str | None = None,
+    equipment_id: str | None = None,
+    fault_code: str | None = None,
+    location: str | None = None,
+    status: str | None = None,
+    workflow_mode: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    where: list[str] = []
+    params: list[Any] = []
+
+    if q:
+        where.append("(issue_text LIKE ? OR symptoms LIKE ? OR notes LIKE ? OR fault_code LIKE ?)")
+        needle = f"%{q.strip()}%"
+        params.extend([needle, needle, needle, needle])
+    if equipment_id:
+        where.append("equipment_id = ?")
+        params.append(equipment_id.strip().upper())
+    if fault_code:
+        where.append("fault_code = ?")
+        params.append(fault_code.strip().upper())
+    if location:
+        where.append("location LIKE ?")
+        params.append(f"%{location.strip()}%")
+    if status:
+        where.append("status = ?")
+        params.append(status.strip().upper())
+    if workflow_mode:
+        where.append("workflow_mode = ?")
+        params.append(workflow_mode.strip().upper())
+    if date_from:
+        where.append("updated_ts >= ?")
+        params.append(date_from)
+    if date_to:
+        where.append("updated_ts <= ?")
+        params.append(date_to)
+
+    where_clause = f"WHERE {' AND '.join(where)}" if where else ""
+    sql = f"""
+        SELECT *
+        FROM issue_records
+        {where_clause}
+        ORDER BY updated_ts DESC
+        LIMIT ? OFFSET ?
+    """
+    params.extend([int(limit), int(offset)])
+    rows = conn.execute(sql, tuple(params)).fetchall()
+    return [_parse_issue_record_row(row) for row in rows]
+
+
+def _parse_attachment_row(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+    item = dict(row)
+    item["byte_size"] = int(item.get("byte_size", 0))
+    item["vision_features_json"] = _parse_json(item.get("vision_features_json")) or {}
+    return item
+
+
+def count_job_step_attachments(conn: sqlite3.Connection, job_id: str, step_id: str) -> int:
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM issue_attachments
+        WHERE job_id = ? AND step_id = ?
+        """,
+        (job_id, step_id),
+    ).fetchone()
+    return int(row["count"]) if row else 0
+
+
+def insert_issue_attachment(conn: sqlite3.Connection, attachment: dict[str, Any]) -> None:
+    conn.execute(
+        """
+        INSERT INTO issue_attachments(
+            attachment_id, job_id, step_id, created_ts, captured_ts, source, filename, mime_type,
+            byte_size, sha256, caption, local_rel_path, server_rel_path, sync_state, sync_error, vision_features_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            attachment["attachment_id"],
+            attachment["job_id"],
+            attachment.get("step_id"),
+            attachment.get("created_ts"),
+            attachment.get("captured_ts"),
+            attachment.get("source"),
+            attachment.get("filename"),
+            attachment.get("mime_type"),
+            int(attachment.get("byte_size", 0)),
+            attachment.get("sha256"),
+            attachment.get("caption"),
+            attachment.get("local_rel_path"),
+            attachment.get("server_rel_path"),
+            attachment.get("sync_state", "pending"),
+            attachment.get("sync_error"),
+            _to_json(attachment.get("vision_features_json", {})),
+        ),
+    )
+
+
+def upsert_issue_attachment(conn: sqlite3.Connection, attachment: dict[str, Any]) -> None:
+    conn.execute(
+        """
+        INSERT INTO issue_attachments(
+            attachment_id, job_id, step_id, created_ts, captured_ts, source, filename, mime_type,
+            byte_size, sha256, caption, local_rel_path, server_rel_path, sync_state, sync_error, vision_features_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(attachment_id) DO UPDATE SET
+            job_id=excluded.job_id,
+            step_id=excluded.step_id,
+            created_ts=excluded.created_ts,
+            captured_ts=excluded.captured_ts,
+            source=excluded.source,
+            filename=excluded.filename,
+            mime_type=excluded.mime_type,
+            byte_size=excluded.byte_size,
+            sha256=excluded.sha256,
+            caption=excluded.caption,
+            local_rel_path=excluded.local_rel_path,
+            server_rel_path=excluded.server_rel_path,
+            sync_state=excluded.sync_state,
+            sync_error=excluded.sync_error,
+            vision_features_json=excluded.vision_features_json
+        """,
+        (
+            attachment["attachment_id"],
+            attachment["job_id"],
+            attachment.get("step_id"),
+            attachment.get("created_ts"),
+            attachment.get("captured_ts"),
+            attachment.get("source"),
+            attachment.get("filename"),
+            attachment.get("mime_type"),
+            int(attachment.get("byte_size", 0)),
+            attachment.get("sha256"),
+            attachment.get("caption"),
+            attachment.get("local_rel_path"),
+            attachment.get("server_rel_path"),
+            attachment.get("sync_state", "pending"),
+            attachment.get("sync_error"),
+            _to_json(attachment.get("vision_features_json", {})),
+        ),
+    )
+
+
+def get_job_attachments(conn: sqlite3.Connection, job_id: str) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM issue_attachments
+        WHERE job_id = ?
+        ORDER BY created_ts DESC, attachment_id DESC
+        """,
+        (job_id,),
+    ).fetchall()
+    return [_parse_attachment_row(row) for row in rows]
+
+
+def get_attachment(conn: sqlite3.Connection, attachment_id: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM issue_attachments WHERE attachment_id = ?",
+        (attachment_id,),
+    ).fetchone()
+    if not row:
+        return None
+    return _parse_attachment_row(row)
+
+
+def refresh_issue_attachment_summary(conn: sqlite3.Connection, job_id: str) -> None:
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS count, MAX(created_ts) AS latest_ts
+        FROM issue_attachments
+        WHERE job_id = ?
+        """,
+        (job_id,),
+    ).fetchone()
+    count = int(row["count"]) if row else 0
+    latest_ts = row["latest_ts"] if row else None
+    cursor = conn.execute(
+        """
+        UPDATE issue_records
+        SET attachment_count = ?, latest_attachment_ts = ?
+        WHERE issue_id = ?
+        """,
+        (count, latest_ts, job_id),
+    )
+    if cursor.rowcount > 0:
+        return
+    job = get_job(conn, job_id)
+    if not job:
+        return
+    upsert_issue_record(conn, _build_issue_record_from_job(job))
+    conn.execute(
+        """
+        UPDATE issue_records
+        SET attachment_count = ?, latest_attachment_ts = ?
+        WHERE issue_id = ?
+        """,
+        (count, latest_ts, job_id),
+    )
 
 
 def insert_decision_log(conn: sqlite3.Connection, entry: dict[str, Any]) -> int:
@@ -337,11 +765,12 @@ def mark_sync_event_failed(conn: sqlite3.Connection, sync_id: int, error_message
 def fetch_pending_approval_jobs(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
-        SELECT job_id, updated_ts, status, field_payload_json, final_response_json, requires_approval,
-               approval_due_ts, timed_out
-        FROM jobs
-        WHERE status IN ('PENDING_APPROVAL', 'TIMEOUT_HOLD')
-        ORDER BY updated_ts DESC
+        SELECT j.job_id, j.updated_ts, j.status, j.field_payload_json, j.final_response_json, j.requires_approval,
+               j.approval_due_ts, j.timed_out, ir.attachment_count, ir.latest_attachment_ts
+        FROM jobs j
+        LEFT JOIN issue_records ir ON ir.issue_id = j.job_id
+        WHERE j.status IN ('PENDING_APPROVAL', 'TIMEOUT_HOLD')
+        ORDER BY j.updated_ts DESC
         """
     ).fetchall()
     pending: list[dict[str, Any]] = []
@@ -366,6 +795,8 @@ def fetch_pending_approval_jobs(conn: sqlite3.Connection) -> list[dict[str, Any]
                 "symptoms": payload.get("symptoms"),
                 "location": payload.get("location"),
                 "high_risk_failed_steps": _count_high_risk_failed_steps(conn, item["job_id"]),
+                "attachment_count": int(item.get("attachment_count", 0) or 0),
+                "latest_attachment_ts": item.get("latest_attachment_ts"),
             }
         )
     return pending
@@ -389,6 +820,7 @@ def fetch_job_with_logs(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]
     return {
         "job": job,
         "decision_log": logs,
+        "attachments": get_job_attachments(conn, job_id),
         "workflow_steps": get_workflow_steps(conn, job_id),
         "workflow_events": fetch_workflow_events(conn, job_id),
     }

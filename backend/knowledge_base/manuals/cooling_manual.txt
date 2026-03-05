@@ -1,0 +1,7 @@
+Cooling System Field Guide (Synthetic)
+
+For recurring over-temperature faults under load, verify coolant concentration, inspect radiator fin blockage, and confirm fan clutch lock-up during commanded high temperature events.
+
+If coolant odor is present with pressure loss, inspect hose clamps, pump weep hole, and thermostat housing seam before replacing sensors.
+
+After repair, perform a controlled warm-up and loaded verification run while recording coolant temp trend and derate counters.

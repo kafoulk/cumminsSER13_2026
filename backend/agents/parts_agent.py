@@ -5,9 +5,12 @@ import re
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 
 MANUALS_DIR = Path(__file__).resolve().parents[1] / "knowledge_base" / "manuals"
 INVENTORY_PATH = Path(__file__).resolve().parents[1] / "knowledge_base" / "synthetic" / "inventory.json"
+PLAYBOOK_PATH = Path(__file__).resolve().parents[1] / "knowledge_base" / "synthetic" / "fault_playbooks.yaml"
 
 PARTS_BY_KEYWORD = {
     "coolant": ["Water pump", "Thermostat", "Coolant hose set"],
@@ -74,6 +77,37 @@ def _load_inventory() -> dict[str, dict[str, int]]:
     return normalized
 
 
+def _load_playbooks() -> list[dict[str, Any]]:
+    if not PLAYBOOK_PATH.exists():
+        return []
+    try:
+        parsed = yaml.safe_load(PLAYBOOK_PATH.read_text(encoding="utf-8")) or {}
+    except Exception:  # noqa: BLE001
+        return []
+    rows = parsed.get("playbooks", []) if isinstance(parsed, dict) else []
+    if not isinstance(rows, list):
+        return []
+    playbooks: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        playbooks.append(
+            {
+                "playbook_id": str(row.get("playbook_id") or row.get("fault_family") or "").strip(),
+                "fault_family": str(row.get("fault_family") or "").strip(),
+                "aliases": [str(item).strip() for item in row.get("aliases", []) if str(item).strip()],
+                "keywords": [str(item).strip() for item in row.get("keywords", []) if str(item).strip()],
+                "likely_causes": [str(item).strip() for item in row.get("likely_causes", []) if str(item).strip()],
+                "diagnostic_steps": [str(item).strip() for item in row.get("diagnostic_steps", []) if str(item).strip()],
+                "recommended_parts": [
+                    str(item).strip() for item in row.get("recommended_parts", []) if str(item).strip()
+                ],
+                "risk_notes": [str(item).strip() for item in row.get("risk_notes", []) if str(item).strip()],
+            }
+        )
+    return playbooks
+
+
 def _pick_inventory_location(payload_location: str, inventory: dict[str, dict[str, int]]) -> str:
     if not inventory:
         return payload_location or "Unknown"
@@ -108,6 +142,27 @@ def collect_evidence(payload: dict[str, Any], triage: dict[str, Any]) -> dict[st
     if not top_hits and scored:
         top_hits = scored[:2]
 
+    playbook_hits: list[tuple[int, dict[str, Any]]] = []
+    lower_query = query_text.lower()
+    for playbook in _load_playbooks():
+        playbook_terms = set()
+        playbook_terms.update(str(term).lower() for term in playbook.get("aliases", []))
+        playbook_terms.update(str(term).lower() for term in playbook.get("keywords", []))
+        family = str(playbook.get("fault_family", "")).lower().strip()
+        if family:
+            playbook_terms.add(family)
+        score = 0
+        matched_terms: list[str] = []
+        for term in playbook_terms:
+            if term and term in lower_query:
+                score += 1
+                matched_terms.append(term)
+        if score > 0:
+            enriched = dict(playbook)
+            enriched["matched_terms"] = matched_terms
+            playbook_hits.append((score, enriched))
+    playbook_hits.sort(key=lambda item: item[0], reverse=True)
+
     manual_refs: list[dict[str, Any]] = []
     source_chunks_used: list[str] = []
     for score, chunk in top_hits:
@@ -121,11 +176,30 @@ def collect_evidence(payload: dict[str, Any], triage: dict[str, Any]) -> dict[st
         )
         source_chunks_used.append(chunk["chunk_id"])
 
-    lower_query = query_text.lower()
+    for score, playbook in playbook_hits[:2]:
+        snippet_lines = []
+        if playbook.get("likely_causes"):
+            snippet_lines.append(f"Likely causes: {', '.join(playbook['likely_causes'][:2])}")
+        if playbook.get("diagnostic_steps"):
+            snippet_lines.append(f"Diagnostics: {playbook['diagnostic_steps'][0]}")
+        if playbook.get("risk_notes"):
+            snippet_lines.append(f"Risk: {playbook['risk_notes'][0]}")
+        manual_refs.append(
+            {
+                "title": f"Playbook: {playbook.get('fault_family') or playbook.get('playbook_id')}",
+                "path": "backend/knowledge_base/synthetic/fault_playbooks.yaml",
+                "snippet": " ".join(snippet_lines)[:220],
+                "score": score,
+            }
+        )
+        source_chunks_used.append(f"fault_playbooks.yaml:{playbook.get('playbook_id') or playbook.get('fault_family')}")
+
     parts_candidates: list[str] = []
     for keyword, parts in PARTS_BY_KEYWORD.items():
         if keyword in lower_query:
             parts_candidates.extend(parts)
+    for _, playbook in playbook_hits[:2]:
+        parts_candidates.extend(playbook.get("recommended_parts", []))
 
     deduped_parts: list[str] = []
     seen: set[str] = set()
@@ -166,8 +240,8 @@ def collect_evidence(payload: dict[str, Any], triage: dict[str, Any]) -> dict[st
     confidence = _clamp(confidence)
 
     evidence_notes = (
-        "Evidence selected via local keyword matching from knowledge_base/manuals and "
-        "heuristic parts mapping from symptom/fault indicators."
+        "Evidence selected via local keyword matching from knowledge_base/manuals, "
+        "structured fault playbooks, and heuristic parts mapping from symptom/fault indicators."
     )
 
     triage_steps = triage.get("next_steps", [])

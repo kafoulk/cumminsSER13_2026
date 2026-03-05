@@ -1,0 +1,7 @@
+Hydraulic Subsystem Checklist (Synthetic)
+
+When hydraulic response is slow or erratic, verify fluid level/condition and inspect suction-side restrictions.
+
+For pressure instability, compare electronic sensor readings with a mechanical gauge at operating temperature.
+
+Escalate for supervisor review if pressure cannot be stabilized within documented service tolerance.

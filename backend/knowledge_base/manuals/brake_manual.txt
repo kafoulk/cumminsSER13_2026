@@ -1,0 +1,7 @@
+Brake Diagnostics Quick Notes (Synthetic)
+
+Any brake warning with smoke or odor requires immediate isolation, wheel-end temperature check, and supervisor notification prior to road release.
+
+For intermittent pressure faults, inspect hydraulic line routing, connector corrosion at pressure transducers, and ABS harness continuity.
+
+Do not authorize final release until pressure stability and warning-light clear criteria are documented.

@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, RefreshCw, ShieldCheck } from "lucide-react";
 import {
   approveJob,
+  getApiBaseUrl,
   getAgentMetrics,
+  getJobDetails,
   getSupervisorQueue,
   replayOfflineQueue,
   syncOfflineQueue,
@@ -17,8 +19,11 @@ export default function Supervisor() {
   const [busyJobId, setBusyJobId] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [queueSourceMessage, setQueueSourceMessage] = useState("");
   const [lastRefreshTs, setLastRefreshTs] = useState("");
   const [metrics, setMetrics] = useState([]);
+  const [attachmentsByJob, setAttachmentsByJob] = useState({});
+  const [loadingAttachmentsJobId, setLoadingAttachmentsJobId] = useState("");
 
   function minutesPending(updatedTs) {
     if (!updatedTs) return 0;
@@ -27,12 +32,25 @@ export default function Supervisor() {
     return Math.max(0, Math.floor((Date.now() - updated) / 60000));
   }
 
+  function toAttachmentUrl(contentUrl) {
+    const raw = String(contentUrl || "").trim();
+    if (!raw) return "";
+    if (raw.startsWith("http://") || raw.startsWith("https://")) return raw;
+    return `${getApiBaseUrl()}${raw}`;
+  }
+
   const loadQueue = useCallback(async () => {
     setLoading(true);
     setError("");
+    setQueueSourceMessage("");
     try {
       const data = await getSupervisorQueue();
       setQueue(data.jobs || []);
+      if (data.local_only) {
+        setQueueSourceMessage(
+          data.detail || "Backend unreachable. Showing on-device queued supervisor items."
+        );
+      }
       setLastRefreshTs(new Date().toLocaleTimeString());
     } catch (queueError) {
       setError(queueError.message);
@@ -128,6 +146,22 @@ export default function Supervisor() {
     }
   }
 
+  async function handleLoadAttachments(jobId) {
+    setLoadingAttachmentsJobId(jobId);
+    setError("");
+    try {
+      const details = await getJobDetails(jobId);
+      setAttachmentsByJob((prev) => ({
+        ...prev,
+        [jobId]: details.attachments || [],
+      }));
+    } catch (attachmentError) {
+      setError(attachmentError.message);
+    } finally {
+      setLoadingAttachmentsJobId("");
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
@@ -177,6 +211,12 @@ export default function Supervisor() {
       {message && (
         <div className="bg-green-900/20 border border-green-600/50 p-3 rounded text-green-200">
           {message}
+        </div>
+      )}
+
+      {queueSourceMessage && (
+        <div className="bg-amber-900/20 border border-amber-600/50 p-3 rounded text-amber-100">
+          {queueSourceMessage}
         </div>
       )}
 
@@ -236,6 +276,9 @@ export default function Supervisor() {
                 {(job.escalation_reasons || []).join(", ") || "N/A"}
               </div>
               <div>
+                <span className="text-slate-400">Attachments:</span> {job.attachment_count || 0}
+              </div>
+              <div>
                 <span className="text-slate-400">Workflow mode:</span> {job.workflow_mode || "N/A"}
               </div>
               <div className="text-xs text-slate-400">
@@ -262,6 +305,37 @@ export default function Supervisor() {
               className="w-full bg-black border border-slate-700 p-2 rounded text-sm min-h-[70px]"
               placeholder="Optional approval notes"
             />
+
+            <button
+              onClick={() => handleLoadAttachments(job.job_id)}
+              disabled={loadingAttachmentsJobId === job.job_id}
+              className="border border-slate-700 hover:border-slate-500 disabled:opacity-50 px-3 py-2 rounded text-xs"
+            >
+              {loadingAttachmentsJobId === job.job_id ? "Loading images..." : "View Images"}
+            </button>
+
+            {(attachmentsByJob[job.job_id] || []).length > 0 && (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                {(attachmentsByJob[job.job_id] || []).map((attachment) => (
+                  <a
+                    key={attachment.attachment_id}
+                    href={toAttachmentUrl(attachment.content_url)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="block border border-slate-800 rounded p-2 bg-black/30"
+                  >
+                    <img
+                      src={toAttachmentUrl(attachment.content_url)}
+                      alt={attachment.caption || attachment.filename || "Attachment"}
+                      className="w-full h-24 object-cover rounded"
+                    />
+                    <div className="text-[11px] text-slate-300 truncate mt-1">
+                      {attachment.filename || attachment.attachment_id}
+                    </div>
+                  </a>
+                ))}
+              </div>
+            )}
 
             <div className="flex gap-2">
               <button
