@@ -111,7 +111,9 @@ function stockTone(status) {
 }
 
 function toReadableInstruction(rawInstruction) {
-  const compact = String(rawInstruction || "").replace(/\s+/g, " ").trim();
+  const compact = String(rawInstruction || "")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!compact) return "Follow this checklist step and record what you find.";
   const markerMatch = compact.match(
     /^(.*?)(?:\s(?:Record:|Capture:|Pass when:|Parts to validate|If blocked\/failed:|Repair and parts guidance).*)$/i,
@@ -122,7 +124,9 @@ function toReadableInstruction(rawInstruction) {
 }
 
 function toFriendlyToken(token) {
-  const raw = String(token || "").trim().toLowerCase();
+  const raw = String(token || "")
+    .trim()
+    .toLowerCase();
   if (!raw) return "";
   const exactMap = {
     active_dtcs: "active fault codes",
@@ -197,10 +201,10 @@ function toFriendlyToken(token) {
     pct: "percent",
     abs: "brake system module",
   };
-  const parts = raw
-    .split("_")
-    .map((part) => map[part] || part);
-  return parts.filter((part, index) => index === 0 || part !== parts[index - 1]).join(" ");
+  const parts = raw.split("_").map((part) => map[part] || part);
+  return parts
+    .filter((part, index) => index === 0 || part !== parts[index - 1])
+    .join(" ");
 }
 
 function toFriendlyList(values) {
@@ -226,7 +230,9 @@ function toGroupedAttachments(attachments) {
 }
 
 function truncateText(value, maxLen = 280) {
-  const text = String(value || "").replace(/\s+/g, " ").trim();
+  const text = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!text) return "N/A";
   if (text.length <= maxLen) return text;
   return `${text.slice(0, maxLen - 1)}...`;
@@ -249,7 +255,10 @@ function loadActiveJobSnapshot() {
 function saveActiveJobSnapshot(snapshot) {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(ACTIVE_JOB_SNAPSHOT_KEY, JSON.stringify(snapshot));
+    window.localStorage.setItem(
+      ACTIVE_JOB_SNAPSHOT_KEY,
+      JSON.stringify(snapshot),
+    );
   } catch {
     // Ignore local storage write errors.
   }
@@ -260,7 +269,9 @@ function fileToBase64(file) {
     const reader = new FileReader();
     reader.onload = () => {
       const value = String(reader.result || "");
-      const base64Payload = value.includes(",") ? value.split(",", 2)[1] : value;
+      const base64Payload = value.includes(",")
+        ? value.split(",", 2)[1]
+        : value;
       resolve(base64Payload);
     };
     reader.onerror = () => reject(new Error("Failed to read image file."));
@@ -284,8 +295,10 @@ export default function TriageEngine() {
   const [selectedScenario, setSelectedScenario] = useState("");
   const [similarIssues, setSimilarIssues] = useState([]);
   const [loadingSimilarIssues, setLoadingSimilarIssues] = useState(false);
-  const [similarPreviewLoadingJobId, setSimilarPreviewLoadingJobId] = useState("");
-  const [similarPreviewExpandedJobId, setSimilarPreviewExpandedJobId] = useState("");
+  const [similarPreviewLoadingJobId, setSimilarPreviewLoadingJobId] =
+    useState("");
+  const [similarPreviewExpandedJobId, setSimilarPreviewExpandedJobId] =
+    useState("");
   const [similarPreviewByJobId, setSimilarPreviewByJobId] = useState({});
   const [historySeedBusy, setHistorySeedBusy] = useState(false);
   const [historySeedMessage, setHistorySeedMessage] = useState("");
@@ -298,7 +311,8 @@ export default function TriageEngine() {
   const [issuePhotoCaption, setIssuePhotoCaption] = useState("");
   const [uploadingIssuePhotos, setUploadingIssuePhotos] = useState(false);
   const [attachmentCaptionByStep, setAttachmentCaptionByStep] = useState({});
-  const [uploadingAttachmentStepId, setUploadingAttachmentStepId] = useState("");
+  const [uploadingAttachmentStepId, setUploadingAttachmentStepId] =
+    useState("");
   const [updatingStepId, setUpdatingStepId] = useState("");
   const [speechSupported, setSpeechSupported] = useState(false);
   const [listening, setListening] = useState(false);
@@ -378,19 +392,35 @@ export default function TriageEngine() {
     return "You can continue with the repair checklist below.";
   }, [result]);
   const quotePackage = useMemo(() => result?.quote_package || null, [result]);
-  const quoteEmailDraft = useMemo(() => result?.quote_email_draft || null, [result]);
-  const quoteStage = useMemo(() => String(result?.quote_stage || "").toUpperCase(), [result]);
+  const quoteEmailDraft = useMemo(
+    () => result?.quote_email_draft || null,
+    [result],
+  );
+  const quoteStage = useMemo(
+    () => String(result?.quote_stage || "").toUpperCase(),
+    [result],
+  );
   const canGenerateQuote = useMemo(() => {
     if (!result) return false;
-    return ["DIAGNOSTIC_IN_PROGRESS", "QUOTE_REWORK_REQUIRED", "READY"].includes(String(result.status || "").toUpperCase());
+    return [
+      "DIAGNOSTIC_IN_PROGRESS",
+      "QUOTE_REWORK_REQUIRED",
+      "READY",
+    ].includes(String(result.status || "").toUpperCase());
   }, [result]);
   const canDraftQuoteEmail = useMemo(() => {
     if (!result || !quotePackage) return false;
-    return ["DIAGNOSTIC_IN_PROGRESS", "QUOTE_REWORK_REQUIRED", "READY"].includes(String(result.status || "").toUpperCase());
+    return [
+      "DIAGNOSTIC_IN_PROGRESS",
+      "QUOTE_REWORK_REQUIRED",
+      "READY",
+    ].includes(String(result.status || "").toUpperCase());
   }, [result, quotePackage]);
   const canRecordCustomerDecision = useMemo(() => {
     if (!result) return false;
-    return String(result.status || "").toUpperCase() === "AWAITING_CUSTOMER_APPROVAL";
+    return (
+      String(result.status || "").toUpperCase() === "AWAITING_CUSTOMER_APPROVAL"
+    );
   }, [result]);
   const canCompleteRepair = useMemo(() => {
     if (!result) return false;
@@ -399,8 +429,12 @@ export default function TriageEngine() {
     );
   }, [result]);
   const canUsePartsNow = useMemo(() => {
-    const status = String(result?.status || workflowPartsStatus || "").toUpperCase();
-    const inRepair = ["REPAIR_POOL_OPEN", "REPAIR_IN_PROGRESS"].includes(status);
+    const status = String(
+      result?.status || workflowPartsStatus || "",
+    ).toUpperCase();
+    const inRepair = ["REPAIR_POOL_OPEN", "REPAIR_IN_PROGRESS"].includes(
+      status,
+    );
     return inRepair && workflowPartsEnabled;
   }, [result?.status, workflowPartsEnabled, workflowPartsStatus]);
   const issueLevelAttachments = useMemo(() => {
@@ -413,11 +447,32 @@ export default function TriageEngine() {
   const customerInfo = useMemo(() => {
     const payload = jobDetails?.job?.field_payload_json || {};
     return {
-      name: String(payload.customer_name || result?.customer_info?.name || form.customer_name || "").trim(),
-      phone: String(payload.customer_phone || result?.customer_info?.phone || form.customer_phone || "").trim(),
-      email: String(payload.customer_email || result?.customer_info?.email || form.customer_email || "").trim(),
+      name: String(
+        payload.customer_name ||
+          result?.customer_info?.name ||
+          form.customer_name ||
+          "",
+      ).trim(),
+      phone: String(
+        payload.customer_phone ||
+          result?.customer_info?.phone ||
+          form.customer_phone ||
+          "",
+      ).trim(),
+      email: String(
+        payload.customer_email ||
+          result?.customer_info?.email ||
+          form.customer_email ||
+          "",
+      ).trim(),
     };
-  }, [jobDetails, result, form.customer_name, form.customer_phone, form.customer_email]);
+  }, [
+    jobDetails,
+    result,
+    form.customer_name,
+    form.customer_phone,
+    form.customer_email,
+  ]);
   const maxAttachmentBytes = 3 * 1024 * 1024;
 
   function toAttachmentUrl(contentUrl) {
@@ -440,7 +495,9 @@ export default function TriageEngine() {
       const data = await getWorkflowParts(jobId);
       const map = {};
       for (const item of data?.steps || []) {
-        map[String(item?.step_id || "")] = Array.isArray(item?.parts) ? item.parts : [];
+        map[String(item?.step_id || "")] = Array.isArray(item?.parts)
+          ? item.parts
+          : [];
       }
       setWorkflowPartsByStep(map);
       setWorkflowPartsLocation(String(data?.location || ""));
@@ -563,10 +620,16 @@ export default function TriageEngine() {
     setForm((prev) => ({ ...prev, ...(snapshot.form || {}) }));
     setResult(snapshot.result || null);
     setJobDetails(snapshot.jobDetails || null);
-    setWorkflowSteps(Array.isArray(snapshot.workflowSteps) ? snapshot.workflowSteps : []);
-    setWorkflowEvents(Array.isArray(snapshot.workflowEvents) ? snapshot.workflowEvents : []);
+    setWorkflowSteps(
+      Array.isArray(snapshot.workflowSteps) ? snapshot.workflowSteps : [],
+    );
+    setWorkflowEvents(
+      Array.isArray(snapshot.workflowEvents) ? snapshot.workflowEvents : [],
+    );
     setTimeline(Array.isArray(snapshot.timeline) ? snapshot.timeline : []);
-    setSimilarIssues(Array.isArray(snapshot.similarIssues) ? snapshot.similarIssues : []);
+    setSimilarIssues(
+      Array.isArray(snapshot.similarIssues) ? snapshot.similarIssues : [],
+    );
     setStepNotes(snapshot.stepNotes || {});
     setStepMeasurements(snapshot.stepMeasurements || {});
     setAttachmentsByStep(snapshot.attachmentsByStep || {});
@@ -574,7 +637,9 @@ export default function TriageEngine() {
     setWorkflowPartsLocation(String(snapshot.workflowPartsLocation || ""));
     setWorkflowPartsEnabled(Boolean(snapshot.workflowPartsEnabled));
     setWorkflowPartsStatus(String(snapshot.workflowPartsStatus || ""));
-    setPartsUsage(Array.isArray(snapshot.partsUsage) ? snapshot.partsUsage : []);
+    setPartsUsage(
+      Array.isArray(snapshot.partsUsage) ? snapshot.partsUsage : [],
+    );
     setPartQtyByKey(snapshot.partQtyByKey || {});
     setQueueActionMessage(String(snapshot.queueActionMessage || ""));
     setPartsActionMessage(String(snapshot.partsActionMessage || ""));
@@ -1047,6 +1112,28 @@ export default function TriageEngine() {
     }
   }
 
+  // This button simulates sending the quote after a draft is prepared.
+  // In the current backend flow the draft is routed to supervisor, but having
+  // an explicit "Send Quote" control makes it clearer for the technician.
+  async function handleSendQuote() {
+    if (!createdJobId) return;
+    setEmailBusy(true);
+    setError("");
+    try {
+      // reuse the draft endpoint to update the job and trigger supervisor queue
+      await draftQuoteEmail(createdJobId, {
+        recipient_name: quoteRecipientName,
+        recipient_email: quoteRecipientEmail,
+      });
+      setQueueActionMessage("Quote sent to supervisor queue.");
+      await handleLoadJobDetails();
+    } catch (sendError) {
+      setError(sendError.message);
+    } finally {
+      setEmailBusy(false);
+    }
+  }
+
   async function handleCustomerDecision(decision) {
     if (!createdJobId) return;
     setCustomerBusy(true);
@@ -1055,7 +1142,10 @@ export default function TriageEngine() {
       await recordCustomerApproval(createdJobId, {
         decision,
         actor_id: "field_technician",
-        notes: decision === "approve" ? "Customer approved quote." : "Customer declined quote.",
+        notes:
+          decision === "approve"
+            ? "Customer approved quote."
+            : "Customer declined quote.",
       });
       await handleLoadJobDetails();
       await loadQuickQueues(false);
@@ -1119,7 +1209,9 @@ export default function TriageEngine() {
         notes: String(completionNotes || "").trim(),
       });
       if (response?.queued_offline) {
-        setQueueActionMessage("Completion queued offline. It will sync when connection returns.");
+        setQueueActionMessage(
+          "Completion queued offline. It will sync when connection returns.",
+        );
       } else {
         setQueueActionMessage(`Marked ${createdJobId} as REPAIR_COMPLETED.`);
         setCompletionNotes("");
@@ -1233,8 +1325,9 @@ export default function TriageEngine() {
           captured_ts: item.captured_ts || new Date().toISOString(),
         };
         const response = await uploadJobAttachment(jobId, payload);
-        const responseStepId =
-          String(response?.step_id || response?.attachment?.step_id || stepId);
+        const responseStepId = String(
+          response?.step_id || response?.attachment?.step_id || stepId,
+        );
         if (response?.queued_offline) {
           setAttachmentsByStep((prev) => {
             const next = { ...prev };
@@ -1248,7 +1341,10 @@ export default function TriageEngine() {
               sync_state: "queued_offline",
               created_ts: new Date().toISOString(),
             };
-            next[responseStepId] = [queuedItem, ...(next[responseStepId] || [])];
+            next[responseStepId] = [
+              queuedItem,
+              ...(next[responseStepId] || []),
+            ];
             return next;
           });
           uploadedIds.push(item.id);
@@ -1592,14 +1688,18 @@ export default function TriageEngine() {
         notes: stepNotes[stepId] || null,
       });
       if (response?.queued_offline) {
-        setPartsActionMessage("Part usage queued offline. It will sync when connectivity returns.");
+        setPartsActionMessage(
+          "Part usage queued offline. It will sync when connectivity returns.",
+        );
       } else if (response?.ok === false && response?.blocked_out_of_stock) {
         const requestId = response?.restock_request?.request_id;
         setPartsActionMessage(
           `Out of stock for ${part.part_name}. Restock request created${requestId ? ` (${requestId})` : ""}.`,
         );
       } else {
-        const remaining = Number(response?.inventory?.quantity_on_hand ?? part.quantity_on_hand ?? 0);
+        const remaining = Number(
+          response?.inventory?.quantity_on_hand ?? part.quantity_on_hand ?? 0,
+        );
         setPartsActionMessage(
           `Recorded ${quantityUsed} x ${part.part_name}. Remaining at ${part.location}: ${remaining}.`,
         );
@@ -1672,298 +1772,305 @@ export default function TriageEngine() {
           onSubmit={handleSubmit}
           className="relative w-full max-w-md mx-auto space-y-4 pb-[calc(2rem+env(safe-area-inset-bottom))]"
         >
-        <div className="rounded-2xl border border-white/10 bg-gradient-to-b from-white/5 to-white/0 p-4 shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
-          <h1 className="text-lg font-bold tracking-tight">
-            STEP 1: TELL US WHAT HAPPENED
-          </h1>
+          <div className="rounded-2xl border border-white/10 bg-gradient-to-b from-white/5 to-white/0 p-4 shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
+            <h1 className="text-lg font-bold tracking-tight">
+              STEP 1: TELL US WHAT HAPPENED
+            </h1>
 
-          <p className="mt-2 text-xs text-slate-400 leading-relaxed">
-            Example: &quot;Truck smells like coolant and temp climbs fast on
-            hills.&quot;
-          </p>
+            <p className="mt-2 text-xs text-slate-400 leading-relaxed">
+              Example: &quot;Truck smells like coolant and temp climbs fast on
+              hills.&quot;
+            </p>
 
-          <div className="mt-5">
-            <div className="mb-2 flex items-center justify-between">
-              <span className="text-sm font-medium text-slate-200">
-                Describe the issue
-              </span>
-            </div>
-
-            <div className="relative">
-              <textarea
-                value={form.issue_text}
-                onChange={(event) =>
-                  updateField("issue_text", event.target.value)
-                }
-                className="w-full min-h-[120px] resize-none rounded-xl bg-white/5 border border-white/10 px-3 py-3 pr-12 text-[15px] font-normal text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-white/20 focus:ring-4 focus:ring-white/10"
-                placeholder="Example: Engine temp rises fast under load, coolant leaking near radiator, possible safety risk."
-                required
-              />
-
-              <button
-                type="button"
-                onClick={listening ? stopDictation : startDictation}
-                className={`absolute right-3 top-3 h-9 w-9 rounded-lg border grid place-items-center active:scale-95 ${
-                  listening
-                    ? "border-red-500/50 bg-red-500/20 text-red-100"
-                    : "border-white/10 bg-white/5 text-slate-100"
-                }`}
-                aria-label={listening ? "Stop voice input" : "Voice input"}
-                title={listening ? "Stop voice input" : "Voice input"}
-              >
-                <Mic size={16} />
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-2 flex flex-wrap gap-2 items-center">
-            {!speechSupported && (
-              <span className="text-xs text-slate-500">
-                Voice input support depends on device/browser.
-              </span>
-            )}
-            {speechHint && (
-              <span className="text-xs text-slate-400">{speechHint}</span>
-            )}
-          </div>
-
-          <div className="mt-5 border-t border-white/10 pt-4 space-y-3">
-            <div className="text-sm font-medium text-slate-200">
-              Issue photos <span className="text-slate-400">(optional)</span>
-            </div>
-            <div className="text-xs text-slate-400">
-              Add photos with the original issue. They upload right after the
-              job is created.
-            </div>
-            <input
-              value={issuePhotoCaption}
-              onChange={(event) => setIssuePhotoCaption(event.target.value)}
-              placeholder="Photo caption (optional)"
-              className="w-full h-11 rounded-xl bg-white/5 border border-white/10 px-3 text-[15px] text-slate-100 focus:outline-none focus:border-white/20 focus:ring-4 focus:ring-white/10"
-            />
-            <div className="flex flex-wrap gap-2 items-center">
-              <label className="bg-sky-700 hover:bg-sky-600 px-3 py-2 rounded text-xs font-semibold cursor-pointer">
-                Take Photo
-                <input
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  multiple
-                  className="hidden"
-                  disabled={loading || uploadingIssuePhotos}
-                  onChange={(event) =>
-                    handleIssuePhotoSelection("camera", event)
-                  }
-                />
-              </label>
-              <label className="bg-indigo-700 hover:bg-indigo-600 px-3 py-2 rounded text-xs font-semibold cursor-pointer">
-                Upload Image
-                <input
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  className="hidden"
-                  disabled={loading || uploadingIssuePhotos}
-                  onChange={(event) =>
-                    handleIssuePhotoSelection("gallery", event)
-                  }
-                />
-              </label>
-              {uploadingIssuePhotos && (
-                <span className="text-xs text-slate-400">
-                  Uploading issue photos...
+            <div className="mt-5">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-sm font-medium text-slate-200">
+                  Describe the issue
                 </span>
+              </div>
+
+              <div className="relative">
+                <textarea
+                  value={form.issue_text}
+                  onChange={(event) =>
+                    updateField("issue_text", event.target.value)
+                  }
+                  className="w-full min-h-[120px] resize-none rounded-xl bg-white/5 border border-white/10 px-3 py-3 pr-12 text-[15px] font-normal text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-white/20 focus:ring-4 focus:ring-white/10"
+                  placeholder="Example: Engine temp rises fast under load, coolant leaking near radiator, possible safety risk."
+                  required
+                />
+
+                <button
+                  type="button"
+                  onClick={listening ? stopDictation : startDictation}
+                  className={`absolute right-3 top-3 h-9 w-9 rounded-lg border grid place-items-center active:scale-95 ${
+                    listening
+                      ? "border-red-500/50 bg-red-500/20 text-red-100"
+                      : "border-white/10 bg-white/5 text-slate-100"
+                  }`}
+                  aria-label={listening ? "Stop voice input" : "Voice input"}
+                  title={listening ? "Stop voice input" : "Voice input"}
+                >
+                  <Mic size={16} />
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-2 flex flex-wrap gap-2 items-center">
+              {!speechSupported && (
+                <span className="text-xs text-slate-500">
+                  Voice input support depends on device/browser.
+                </span>
+              )}
+              {speechHint && (
+                <span className="text-xs text-slate-400">{speechHint}</span>
               )}
             </div>
 
-            {pendingIssuePhotos.length > 0 && (
-              <div className="grid grid-cols-2 gap-2">
-                {pendingIssuePhotos.map((item) => (
-                  <div
-                    key={item.id}
-                    className="bg-black/40 border border-slate-800 rounded p-2 text-xs space-y-1"
-                  >
-                    {item.preview_url ? (
-                      <img
-                        src={item.preview_url}
-                        alt={item.caption || item.filename || "Issue photo"}
-                        className="w-full h-24 object-cover rounded border border-slate-700"
-                      />
-                    ) : (
-                      <div className="w-full h-24 rounded border border-slate-700 bg-slate-900 flex items-center justify-center text-slate-500">
-                        image
-                      </div>
-                    )}
-                    <div className="truncate text-slate-300">
-                      {item.filename}
-                    </div>
-                    <div className="truncate text-slate-500">
-                      {item.caption || "No caption"}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => removePendingIssuePhoto(item.id)}
-                      className="text-red-300 hover:text-red-200 text-[11px] underline"
+            <div className="mt-5 border-t border-white/10 pt-4 space-y-3">
+              <div className="text-sm font-medium text-slate-200">
+                Issue photos <span className="text-slate-400">(optional)</span>
+              </div>
+              <div className="text-xs text-slate-400">
+                Add photos with the original issue. They upload right after the
+                job is created.
+              </div>
+              <input
+                value={issuePhotoCaption}
+                onChange={(event) => setIssuePhotoCaption(event.target.value)}
+                placeholder="Photo caption (optional)"
+                className="w-full h-11 rounded-xl bg-white/5 border border-white/10 px-3 text-[15px] text-slate-100 focus:outline-none focus:border-white/20 focus:ring-4 focus:ring-white/10"
+              />
+              <div className="flex flex-wrap gap-2 items-center">
+                <label className="bg-sky-700 hover:bg-sky-600 px-3 py-2 rounded text-xs font-semibold cursor-pointer">
+                  Take Photo
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    multiple
+                    className="hidden"
+                    disabled={loading || uploadingIssuePhotos}
+                    onChange={(event) =>
+                      handleIssuePhotoSelection("camera", event)
+                    }
+                  />
+                </label>
+                <label className="bg-indigo-700 hover:bg-indigo-600 px-3 py-2 rounded text-xs font-semibold cursor-pointer">
+                  Upload Image
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    disabled={loading || uploadingIssuePhotos}
+                    onChange={(event) =>
+                      handleIssuePhotoSelection("gallery", event)
+                    }
+                  />
+                </label>
+                {uploadingIssuePhotos && (
+                  <span className="text-xs text-slate-400">
+                    Uploading issue photos...
+                  </span>
+                )}
+              </div>
+
+              {pendingIssuePhotos.length > 0 && (
+                <div className="grid grid-cols-2 gap-2">
+                  {pendingIssuePhotos.map((item) => (
+                    <div
+                      key={item.id}
+                      className="bg-black/40 border border-slate-800 rounded p-2 text-xs space-y-1"
                     >
-                      Remove
-                    </button>
+                      {item.preview_url ? (
+                        <img
+                          src={item.preview_url}
+                          alt={item.caption || item.filename || "Issue photo"}
+                          className="w-full h-24 object-cover rounded border border-slate-700"
+                        />
+                      ) : (
+                        <div className="w-full h-24 rounded border border-slate-700 bg-slate-900 flex items-center justify-center text-slate-500">
+                          image
+                        </div>
+                      )}
+                      <div className="truncate text-slate-300">
+                        {item.filename}
+                      </div>
+                      <div className="truncate text-slate-500">
+                        {item.caption || "No caption"}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removePendingIssuePhoto(item.id)}
+                        className="text-red-300 hover:text-red-200 text-[11px] underline"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-5 border-t border-white/10 pt-4">
+              <div className="text-sm font-medium text-slate-200">
+                Customer + IDs / location{" "}
+                <span className="text-slate-400">(optional)</span>
+              </div>
+
+              <div className="mt-4 space-y-3">
+                <div>
+                  <div className="mb-1 text-xs font-medium text-slate-400">
+                    Customer name (optional)
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="mt-5 border-t border-white/10 pt-4">
-            <div className="text-sm font-medium text-slate-200">
-              Customer + IDs / location{" "}
-              <span className="text-slate-400">(optional)</span>
-            </div>
-
-            <div className="mt-4 space-y-3">
-              <div>
-                <div className="mb-1 text-xs font-medium text-slate-400">
-                  Customer name (optional)
+                  <input
+                    value={form.customer_name}
+                    onChange={(event) =>
+                      updateField("customer_name", event.target.value)
+                    }
+                    className="w-full h-11 rounded-xl bg-white/5 border border-white/10 px-3 text-[15px] text-slate-100 focus:outline-none focus:border-white/20 focus:ring-4 focus:ring-white/10"
+                    placeholder="Alex Johnson"
+                  />
                 </div>
-                <input
-                  value={form.customer_name}
-                  onChange={(event) =>
-                    updateField("customer_name", event.target.value)
-                  }
-                  className="w-full h-11 rounded-xl bg-white/5 border border-white/10 px-3 text-[15px] text-slate-100 focus:outline-none focus:border-white/20 focus:ring-4 focus:ring-white/10"
-                  placeholder="Alex Johnson"
-                />
-              </div>
 
-              <div>
-                <div className="mb-1 text-xs font-medium text-slate-400">
-                  Customer phone (optional)
+                <div>
+                  <div className="mb-1 text-xs font-medium text-slate-400">
+                    Customer phone (optional)
+                  </div>
+                  <input
+                    value={form.customer_phone}
+                    onChange={(event) =>
+                      updateField("customer_phone", event.target.value)
+                    }
+                    className="w-full h-11 rounded-xl bg-white/5 border border-white/10 px-3 text-[15px] text-slate-100 focus:outline-none focus:border-white/20 focus:ring-4 focus:ring-white/10"
+                    placeholder="(555) 123-4567"
+                  />
                 </div>
-                <input
-                  value={form.customer_phone}
-                  onChange={(event) =>
-                    updateField("customer_phone", event.target.value)
-                  }
-                  className="w-full h-11 rounded-xl bg-white/5 border border-white/10 px-3 text-[15px] text-slate-100 focus:outline-none focus:border-white/20 focus:ring-4 focus:ring-white/10"
-                  placeholder="(555) 123-4567"
-                />
-              </div>
 
-              <div>
-                <div className="mb-1 text-xs font-medium text-slate-400">
-                  Customer email (optional)
+                <div>
+                  <div className="mb-1 text-xs font-medium text-slate-400">
+                    Customer email (optional)
+                  </div>
+                  <input
+                    value={form.customer_email}
+                    onChange={(event) =>
+                      updateField("customer_email", event.target.value)
+                    }
+                    className="w-full h-11 rounded-xl bg-white/5 border border-white/10 px-3 text-[15px] text-slate-100 focus:outline-none focus:border-white/20 focus:ring-4 focus:ring-white/10"
+                    placeholder="customer@example.com"
+                  />
                 </div>
-                <input
-                  value={form.customer_email}
-                  onChange={(event) =>
-                    updateField("customer_email", event.target.value)
-                  }
-                  className="w-full h-11 rounded-xl bg-white/5 border border-white/10 px-3 text-[15px] text-slate-100 focus:outline-none focus:border-white/20 focus:ring-4 focus:ring-white/10"
-                  placeholder="customer@example.com"
-                />
-              </div>
 
-              <div>
-                <div className="mb-1 text-xs font-medium text-slate-400">
-                  Equipment ID (optional)
+                <div>
+                  <div className="mb-1 text-xs font-medium text-slate-400">
+                    Equipment ID (optional)
+                  </div>
+                  <input
+                    value={form.equipment_id}
+                    onChange={(event) =>
+                      updateField("equipment_id", event.target.value)
+                    }
+                    className="w-full h-11 rounded-xl bg-white/5 border border-white/10 px-3 text-[15px] text-slate-100 focus:outline-none focus:border-white/20 focus:ring-4 focus:ring-white/10"
+                    placeholder="EQ-1001"
+                  />
                 </div>
-                <input
-                  value={form.equipment_id}
-                  onChange={(event) =>
-                    updateField("equipment_id", event.target.value)
-                  }
-                  className="w-full h-11 rounded-xl bg-white/5 border border-white/10 px-3 text-[15px] text-slate-100 focus:outline-none focus:border-white/20 focus:ring-4 focus:ring-white/10"
-                  placeholder="EQ-1001"
-                />
-              </div>
 
-              <div>
-                <div className="mb-1 text-xs font-medium text-slate-400">
-                  Fault Code (optional)
+                <div>
+                  <div className="mb-1 text-xs font-medium text-slate-400">
+                    Fault Code (optional)
+                  </div>
+                  <input
+                    value={form.fault_code}
+                    onChange={(event) =>
+                      updateField("fault_code", event.target.value)
+                    }
+                    className="w-full h-11 rounded-xl bg-white/5 border border-white/10 px-3 text-[15px] text-slate-100 focus:outline-none focus:border-white/20 focus:ring-4 focus:ring-white/10"
+                    placeholder="P0217"
+                  />
                 </div>
-                <input
-                  value={form.fault_code}
-                  onChange={(event) =>
-                    updateField("fault_code", event.target.value)
-                  }
-                  className="w-full h-11 rounded-xl bg-white/5 border border-white/10 px-3 text-[15px] text-slate-100 focus:outline-none focus:border-white/20 focus:ring-4 focus:ring-white/10"
-                  placeholder="P0217"
-                />
-              </div>
 
-              <div>
-                <div className="mb-1 text-xs font-medium text-slate-400">
-                  Location (optional)
+                <div>
+                  <div className="mb-1 text-xs font-medium text-slate-400">
+                    Location (optional)
+                  </div>
+                  <input
+                    value={form.location}
+                    onChange={(event) =>
+                      updateField("location", event.target.value)
+                    }
+                    className="w-full h-11 rounded-xl bg-white/5 border border-white/10 px-3 text-[15px] text-slate-100 focus:outline-none focus:border-white/20 focus:ring-4 focus:ring-white/10"
+                    placeholder="Indy Yard"
+                  />
                 </div>
-                <input
-                  value={form.location}
-                  onChange={(event) =>
-                    updateField("location", event.target.value)
-                  }
-                  className="w-full h-11 rounded-xl bg-white/5 border border-white/10 px-3 text-[15px] text-slate-100 focus:outline-none focus:border-white/20 focus:ring-4 focus:ring-white/10"
-                  placeholder="Indy Yard"
-                />
               </div>
-            </div>
 
-            <div className="mt-4 text-xs text-slate-400">
-              {"Diagnostic -> Quote -> Customer approval flow is active. Supervisor routing is disabled in this track."}
+              <div className="mt-4">
+                <button
+                  ref={submitCtaRef}
+                  type="submit"
+                  disabled={loading}
+                  className="w-full h-12 rounded-xl bg-cummins-red text-white font-semibold shadow-lg active:scale-[0.99] disabled:opacity-60"
+                >
+                  {loading ? "Building your checklist..." : "Get My Checklist"}
+                </button>
+              </div>
+
+              <div className="mt-4 text-xs text-slate-400">
+                {
+                  "Diagnostic -> Quote -> Customer approval flow is active. Supervisor routing is disabled in this track."
+                }
+              </div>
             </div>
           </div>
-        </div>
 
-        <details className="pt-2" onToggle={handleDemoToolsToggle}>
-          <summary className="text-xs text-slate-500 cursor-pointer">
-            Demo tools
-          </summary>
-          <div className="pt-2 grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2 items-end">
-            <label className="space-y-1">
-              <span className="text-xs text-slate-400">Demo scenario</span>
-              <select
-                value={selectedScenario}
-                onChange={(event) => loadScenarioById(event.target.value)}
-                className="w-full bg-black border border-slate-700 p-2 rounded text-sm"
+          <details className="pt-2" onToggle={handleDemoToolsToggle}>
+            <summary className="text-xs text-slate-500 cursor-pointer">
+              Demo tools
+            </summary>
+            <div className="pt-2 grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2 items-end">
+              <label className="space-y-1">
+                <span className="text-xs text-slate-400">Demo scenario</span>
+                <select
+                  value={selectedScenario}
+                  onChange={(event) => loadScenarioById(event.target.value)}
+                  className="w-full bg-black border border-slate-700 p-2 rounded text-sm"
+                >
+                  <option value="">Select a canned scenario...</option>
+                  {scenarioCatalog.map((scenario) => (
+                    <option key={scenario.id} value={scenario.id}>
+                      {scenario.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                onClick={() => loadScenarioById("safety_escalation")}
+                data-demo-safety-quick-load
+                className="border border-orange-600 text-orange-300 hover:bg-orange-950/30 px-4 py-2 rounded font-semibold"
               >
-                <option value="">Select a canned scenario...</option>
-                {scenarioCatalog.map((scenario) => (
-                  <option key={scenario.id} value={scenario.id}>
-                    {scenario.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              type="button"
-              onClick={() => loadScenarioById("safety_escalation")}
-              data-demo-safety-quick-load
-              className="border border-orange-600 text-orange-300 hover:bg-orange-950/30 px-4 py-2 rounded font-semibold"
-            >
-              Quick Load Safety Scenario
-            </button>
-          </div>
-          <div className="pt-2 flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={handleResetHistorySeed}
-              disabled={historySeedBusy}
-              className="border border-emerald-700 text-emerald-300 hover:bg-emerald-950/30 px-3 py-2 rounded text-xs font-semibold disabled:opacity-50"
-            >
-              {historySeedBusy ? "Resetting history..." : "Reset + Seed History Examples"}
-            </button>
-            {historySeedMessage && (
-              <span className="text-xs text-emerald-300">{historySeedMessage}</span>
-            )}
-          </div>
-        </details>
-
-        <div ref={submitCtaRef} className="fixed left-4 right-4 bottom-[calc(72px+env(safe-area-inset-bottom))] max-w-md mx-auto">
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full h-12 rounded-xl bg-cummins-red text-white font-semibold shadow-lg active:scale-[0.99] disabled:opacity-60"
-          >
-            {loading ? "Building your checklist..." : "Get My Checklist"}
-          </button>
-        </div>
+                Quick Load Safety Scenario
+              </button>
+            </div>
+            <div className="pt-2 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleResetHistorySeed}
+                disabled={historySeedBusy}
+                className="border border-emerald-700 text-emerald-300 hover:bg-emerald-950/30 px-3 py-2 rounded text-xs font-semibold disabled:opacity-50"
+              >
+                {historySeedBusy
+                  ? "Resetting history..."
+                  : "Reset + Seed History Examples"}
+              </button>
+              {historySeedMessage && (
+                <span className="text-xs text-emerald-300">
+                  {historySeedMessage}
+                </span>
+              )}
+            </div>
+          </details>
         </form>
       )}
 
@@ -1975,137 +2082,148 @@ export default function TriageEngine() {
 
       {(activeMenu === "customer" || activeMenu === "tickets") && (
         <section className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="font-bold text-base">
-              {activeMenu === "customer" ? "Customer Queue" : "Open Tickets"}
-            </h3>
-            <p className="text-xs text-slate-500">
-              {activeMenu === "customer"
-                ? "Approve or decline customer quotes."
-                : "Claim tickets that are ready for repair."}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => loadQuickQueues(true)}
-            className="border border-slate-700 hover:border-slate-500 px-3 py-1.5 rounded text-xs"
-          >
-            {loadingCustomerQueue || loadingOpenTickets ? "Refreshing..." : "Refresh"}
-          </button>
-        </div>
-
-        {queueActionMessage && (
-          <div className="bg-green-900/20 border border-green-600/50 text-green-200 p-2 rounded text-xs">
-            {queueActionMessage}
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 gap-3">
-          {activeMenu === "customer" && (
-            <div className="bg-black/30 border border-slate-800 rounded p-3 space-y-2">
-            <div className="text-xs uppercase tracking-wide text-slate-400">
-              Customer Approval Queue ({customerQueue.length})
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="font-bold text-base">
+                {activeMenu === "customer" ? "Customer Queue" : "Open Tickets"}
+              </h3>
+              <p className="text-xs text-slate-500">
+                {activeMenu === "customer"
+                  ? "Approve or decline customer quotes."
+                  : "Claim tickets that are ready for repair."}
+              </p>
             </div>
-            {customerQueue.length === 0 ? (
-              <div className="text-xs text-slate-500">
-                No jobs waiting on customer approval.
-              </div>
-            ) : (
-              customerQueue.map((job) => (
-                <div
-                  key={`cust-${job.job_id}`}
-                  className="border border-slate-800 rounded p-2 space-y-1"
-                >
-                  <div className="text-[11px] font-mono text-slate-400">{job.job_id}</div>
-                  <div className="text-xs text-slate-300">
-                    {job.equipment_id || "N/A"} | {job.fault_code || "N/A"}
-                  </div>
-                  <div className="text-xs text-slate-400">
-                    Quote:{" "}
-                    {job.quote_total_usd
-                      ? `$${Number(job.quote_total_usd).toFixed(2)}`
-                      : "N/A"}
-                  </div>
-                  <div className="text-xs text-slate-400">
-                    Customer: {job.customer_name || job.customer_email || "N/A"}
-                  </div>
-                  <div className="flex gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => handleQueueCustomerDecision(job.job_id, "approve")}
-                      disabled={customerQueueBusyJobId === job.job_id}
-                      className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 px-2 py-1 rounded text-[11px] font-semibold"
-                    >
-                      Approved
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleQueueCustomerDecision(job.job_id, "deny")}
-                      disabled={customerQueueBusyJobId === job.job_id}
-                      className="bg-red-700 hover:bg-red-600 disabled:opacity-50 px-2 py-1 rounded text-[11px] font-semibold"
-                    >
-                      Declined
-                    </button>
-                  </div>
-                </div>
-              ))
-            )}
+            <button
+              type="button"
+              onClick={() => loadQuickQueues(true)}
+              className="border border-slate-700 hover:border-slate-500 px-3 py-1.5 rounded text-xs"
+            >
+              {loadingCustomerQueue || loadingOpenTickets
+                ? "Refreshing..."
+                : "Refresh"}
+            </button>
+          </div>
+
+          {queueActionMessage && (
+            <div className="bg-green-900/20 border border-green-600/50 text-green-200 p-2 rounded text-xs">
+              {queueActionMessage}
             </div>
           )}
 
-          {activeMenu === "tickets" && (
-            <div className="bg-black/30 border border-slate-800 rounded p-3 space-y-2">
-            <div className="text-xs uppercase tracking-wide text-slate-400">
-              Open Tickets Queue ({openTickets.length})
-            </div>
-            {openTickets.length === 0 ? (
-              <div className="text-xs text-slate-500">
-                No tickets in repair pool yet.
-              </div>
-            ) : (
-              openTickets.map((job) => (
-                <div
-                  key={`open-${job.job_id}`}
-                  className="border border-slate-800 rounded p-2 space-y-1"
-                >
-                  <div className="text-[11px] font-mono text-slate-400">{job.job_id}</div>
-                  <div className="text-xs text-slate-300">
-                    {job.equipment_id || "N/A"} | {job.fault_code || "N/A"}
+          <div className="grid grid-cols-1 gap-3">
+            {activeMenu === "customer" && (
+              <div className="bg-black/30 border border-slate-800 rounded p-3 space-y-2">
+                <div className="text-xs uppercase tracking-wide text-slate-400">
+                  Customer Approval Queue ({customerQueue.length})
+                </div>
+                {customerQueue.length === 0 ? (
+                  <div className="text-xs text-slate-500">
+                    No jobs waiting on customer approval.
                   </div>
-                  <div className="text-xs text-slate-400">
-                    Status: {job.status || "N/A"}
-                  </div>
-                  <div className="flex gap-1.5">
-                    {job.status === "REPAIR_POOL_OPEN" ? (
-                      <button
-                        type="button"
-                        onClick={() => handleClaimOpenTicket(job.job_id)}
-                        disabled={openTicketBusyJobId === job.job_id}
-                        className="bg-indigo-700 hover:bg-indigo-600 disabled:opacity-50 px-2 py-1 rounded text-[11px] font-semibold"
-                      >
-                        Claim Ticket
-                      </button>
-                    ) : (
-                      <div className="text-[11px] text-slate-500 self-center">
-                        Already claimed
+                ) : (
+                  customerQueue.map((job) => (
+                    <div
+                      key={`cust-${job.job_id}`}
+                      className="border border-slate-800 rounded p-2 space-y-1"
+                    >
+                      <div className="text-[11px] font-mono text-slate-400">
+                        {job.job_id}
                       </div>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => loadJobDetailsById(job.job_id)}
-                      disabled={loadingDetails}
-                      className="border border-slate-700 hover:border-slate-500 disabled:opacity-50 px-2 py-1 rounded text-[11px] font-semibold"
-                    >
-                      Open Checklist
-                    </button>
-                  </div>
-                </div>
-              ))
+                      <div className="text-xs text-slate-300">
+                        {job.equipment_id || "N/A"} | {job.fault_code || "N/A"}
+                      </div>
+                      <div className="text-xs text-slate-400">
+                        Quote:{" "}
+                        {job.quote_total_usd
+                          ? `$${Number(job.quote_total_usd).toFixed(2)}`
+                          : "N/A"}
+                      </div>
+                      <div className="text-xs text-slate-400">
+                        Customer:{" "}
+                        {job.customer_name || job.customer_email || "N/A"}
+                      </div>
+                      <div className="flex gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleQueueCustomerDecision(job.job_id, "approve")
+                          }
+                          disabled={customerQueueBusyJobId === job.job_id}
+                          className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 px-2 py-1 rounded text-[11px] font-semibold"
+                        >
+                          Approved
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleQueueCustomerDecision(job.job_id, "deny")
+                          }
+                          disabled={customerQueueBusyJobId === job.job_id}
+                          className="bg-red-700 hover:bg-red-600 disabled:opacity-50 px-2 py-1 rounded text-[11px] font-semibold"
+                        >
+                          Declined
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
             )}
-            </div>
-          )}
-        </div>
+
+            {activeMenu === "tickets" && (
+              <div className="bg-black/30 border border-slate-800 rounded p-3 space-y-2">
+                <div className="text-xs uppercase tracking-wide text-slate-400">
+                  Open Tickets Queue ({openTickets.length})
+                </div>
+                {openTickets.length === 0 ? (
+                  <div className="text-xs text-slate-500">
+                    No tickets in repair pool yet.
+                  </div>
+                ) : (
+                  openTickets.map((job) => (
+                    <div
+                      key={`open-${job.job_id}`}
+                      className="border border-slate-800 rounded p-2 space-y-1"
+                    >
+                      <div className="text-[11px] font-mono text-slate-400">
+                        {job.job_id}
+                      </div>
+                      <div className="text-xs text-slate-300">
+                        {job.equipment_id || "N/A"} | {job.fault_code || "N/A"}
+                      </div>
+                      <div className="text-xs text-slate-400">
+                        Status: {job.status || "N/A"}
+                      </div>
+                      <div className="flex gap-1.5">
+                        {job.status === "REPAIR_POOL_OPEN" ? (
+                          <button
+                            type="button"
+                            onClick={() => handleClaimOpenTicket(job.job_id)}
+                            disabled={openTicketBusyJobId === job.job_id}
+                            className="bg-indigo-700 hover:bg-indigo-600 disabled:opacity-50 px-2 py-1 rounded text-[11px] font-semibold"
+                          >
+                            Claim Ticket
+                          </button>
+                        ) : (
+                          <div className="text-[11px] text-slate-500 self-center">
+                            Already claimed
+                          </div>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => loadJobDetailsById(job.job_id)}
+                          disabled={loadingDetails}
+                          className="border border-slate-700 hover:border-slate-500 disabled:opacity-50 px-2 py-1 rounded text-[11px] font-semibold"
+                        >
+                          Open Checklist
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
         </section>
       )}
 
@@ -2154,22 +2272,29 @@ export default function TriageEngine() {
               </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm text-slate-200">
                 <div>
-                  <div className="text-[11px] text-slate-500 uppercase">Name</div>
+                  <div className="text-[11px] text-slate-500 uppercase">
+                    Name
+                  </div>
                   <div>{customerInfo.name || "N/A"}</div>
                 </div>
                 <div>
-                  <div className="text-[11px] text-slate-500 uppercase">Phone</div>
+                  <div className="text-[11px] text-slate-500 uppercase">
+                    Phone
+                  </div>
                   <div>{customerInfo.phone || "N/A"}</div>
                 </div>
                 <div>
-                  <div className="text-[11px] text-slate-500 uppercase">Email</div>
+                  <div className="text-[11px] text-slate-500 uppercase">
+                    Email
+                  </div>
                   <div>{customerInfo.email || "N/A"}</div>
                 </div>
               </div>
             </div>
           )}
 
-          {(issueLevelAttachments.length > 0 || pendingIssuePhotos.length > 0) && (
+          {(issueLevelAttachments.length > 0 ||
+            pendingIssuePhotos.length > 0) && (
             <div className="bg-black/30 border border-slate-800 rounded p-3 space-y-2">
               <div className="text-xs uppercase tracking-wide text-slate-400">
                 Issue Photos
@@ -2214,7 +2339,9 @@ export default function TriageEngine() {
                     {item.preview_url ? (
                       <img
                         src={item.preview_url}
-                        alt={item.caption || item.filename || "Pending issue photo"}
+                        alt={
+                          item.caption || item.filename || "Pending issue photo"
+                        }
                         className="w-full h-24 object-cover rounded border border-slate-700"
                       />
                     ) : (
@@ -2247,12 +2374,14 @@ export default function TriageEngine() {
 
           {result.status === "QUEUED_OFFLINE" ? (
             <div className="bg-yellow-900/20 border border-yellow-600/60 text-yellow-200 p-3 rounded text-sm">
-              This job is saved offline. It will process automatically once
-              you reconnect.
+              This job is saved offline. It will process automatically once you
+              reconnect.
             </div>
           ) : (
             <div className="bg-sky-900/20 border border-sky-600/50 text-sky-200 p-3 rounded text-sm">
-              {"Flow: Gather details -> Send quote -> Get customer approval -> Start repair steps."}
+              {
+                "Flow: Gather details -> Send quote -> Get customer approval -> Start repair steps."
+              }
             </div>
           )}
 
@@ -2295,34 +2424,56 @@ export default function TriageEngine() {
               <input
                 value={quoteRecipientName}
                 onChange={(event) => setQuoteRecipientName(event.target.value)}
-                className="bg-black border border-slate-700 p-2 rounded text-sm"
+                className="bg-black text-slate-100 border border-slate-700 p-2 rounded text-sm"
                 placeholder="Customer name (optional)"
               />
               <input
                 value={quoteRecipientEmail}
                 onChange={(event) => setQuoteRecipientEmail(event.target.value)}
-                className="bg-black border border-slate-700 p-2 rounded text-sm"
+                className="bg-black text-slate-100 border border-slate-700 p-2 rounded text-sm"
                 placeholder="Customer email (optional)"
               />
             </div>
 
+            {quoteEmailDraft && (
+              <div className="pt-2 flex flex-wrap gap-2">
+                <button
+                  onClick={handleSendQuote}
+                  disabled={emailBusy}
+                  className={`px-3 py-2 rounded text-xs font-semibold bg-emerald-700 text-white hover:bg-emerald-600 disabled:opacity-50`}
+                >
+                  {emailBusy ? "Sending..." : "Send Quote"}
+                </button>
+              </div>
+            )}
+
             {quotePackage && (
               <div className="bg-black/40 border border-slate-800 rounded p-3 text-sm space-y-1">
                 <div>
-                  Quote <span className="font-mono">{quotePackage.quote_id || "N/A"}</span>
+                  Quote{" "}
+                  <span className="font-mono">
+                    {quotePackage.quote_id || "N/A"}
+                  </span>
                 </div>
-                <div>Subtotal: ${Number(quotePackage.subtotal_usd || 0).toFixed(2)}</div>
+                <div>
+                  Subtotal: ${Number(quotePackage.subtotal_usd || 0).toFixed(2)}
+                </div>
                 <div>Tax: ${Number(quotePackage.tax_usd || 0).toFixed(2)}</div>
-                <div className="font-semibold">Total: ${Number(quotePackage.total_usd || 0).toFixed(2)}</div>
+                <div className="font-semibold">
+                  Total: ${Number(quotePackage.total_usd || 0).toFixed(2)}
+                </div>
               </div>
             )}
 
             {quoteEmailDraft?.subject && (
               <details className="bg-black/40 border border-slate-800 rounded p-3 text-sm">
-                <summary className="cursor-pointer text-slate-200">Email Draft Preview</summary>
+                <summary className="cursor-pointer text-slate-200">
+                  Email Draft Preview
+                </summary>
                 <div className="pt-3 space-y-2">
                   <div>
-                    <span className="text-slate-400">Subject:</span> {quoteEmailDraft.subject}
+                    <span className="text-slate-400">Subject:</span>{" "}
+                    {quoteEmailDraft.subject}
                   </div>
                   <pre className="whitespace-pre-wrap text-xs bg-black/40 border border-slate-800 rounded p-2">
                     {quoteEmailDraft.body_text}
@@ -2375,7 +2526,8 @@ export default function TriageEngine() {
                 Complete Job
               </div>
               <div className="text-xs text-emerald-300">
-                When repair is finished, complete the ticket to remove it from Open Tickets.
+                When repair is finished, complete the ticket to remove it from
+                Open Tickets.
               </div>
               <input
                 value={completionNotes}
@@ -2406,7 +2558,9 @@ export default function TriageEngine() {
                 Similar Past Jobs
               </div>
               {loadingSimilarIssues && (
-                <div className="text-[11px] text-slate-500">Checking history...</div>
+                <div className="text-[11px] text-slate-500">
+                  Checking history...
+                </div>
               )}
             </div>
             {similarIssues.length === 0 ? (
@@ -2420,7 +2574,9 @@ export default function TriageEngine() {
                     key={`similar-${item.job_id}`}
                     className="border border-slate-800 rounded p-2 bg-black/20"
                   >
-                    <div className="text-[11px] font-mono text-slate-400">{item.job_id}</div>
+                    <div className="text-[11px] font-mono text-slate-400">
+                      {item.job_id}
+                    </div>
                     <div className="text-xs text-slate-300">
                       Similarity: {Math.round(Number(item.score || 0) * 100)}%
                       {" | "}
@@ -2442,13 +2598,6 @@ export default function TriageEngine() {
                             ? "Loading..."
                             : "Preview"}
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => loadJobDetailsById(item.job_id)}
-                        className="border border-cummins-red/60 text-cummins-red hover:bg-cummins-red/10 px-2 py-1 rounded text-[11px] font-semibold"
-                      >
-                        Open Job
-                      </button>
                     </div>
                     {similarPreviewExpandedJobId === item.job_id &&
                       (() => {
@@ -2459,27 +2608,50 @@ export default function TriageEngine() {
                         return (
                           <div className="mt-2 border border-slate-800 rounded p-2 bg-black/30 space-y-1">
                             <div className="text-[11px] text-slate-400">
-                              Status: <span className="text-slate-200">{job?.status || item.status || "N/A"}</span>
+                              Status:{" "}
+                              <span className="text-slate-200">
+                                {job?.status || item.status || "N/A"}
+                              </span>
                             </div>
                             <div className="text-[11px] text-slate-400">
-                              Location: <span className="text-slate-200">{payload?.location || "N/A"}</span>
+                              Location:{" "}
+                              <span className="text-slate-200">
+                                {payload?.location || "N/A"}
+                              </span>
                               {" | "}
-                              Updated: <span className="text-slate-200">{job?.updated_ts || item.updated_ts || "N/A"}</span>
+                              Updated:{" "}
+                              <span className="text-slate-200">
+                                {job?.updated_ts || item.updated_ts || "N/A"}
+                              </span>
                             </div>
                             <div className="text-[11px] text-slate-400">
-                              Symptoms: <span className="text-slate-200">{truncateText(payload?.symptoms, 140)}</span>
+                              Symptoms:{" "}
+                              <span className="text-slate-200">
+                                {truncateText(payload?.symptoms, 140)}
+                              </span>
                             </div>
                             <div className="text-[11px] text-slate-400">
-                              Notes: <span className="text-slate-200">{truncateText(payload?.notes, 140)}</span>
+                              Notes:{" "}
+                              <span className="text-slate-200">
+                                {truncateText(payload?.notes, 140)}
+                              </span>
                             </div>
                             <div className="text-[11px] text-slate-400">
                               Service report:{" "}
-                              <span className="text-slate-200">{truncateText(final?.service_report, 220)}</span>
+                              <span className="text-slate-200">
+                                {truncateText(final?.service_report, 220)}
+                              </span>
                             </div>
                             <div className="text-[11px] text-slate-500">
-                              Checklist steps: {Array.isArray(preview?.workflow_steps) ? preview.workflow_steps.length : 0}
+                              Checklist steps:{" "}
+                              {Array.isArray(preview?.workflow_steps)
+                                ? preview.workflow_steps.length
+                                : 0}
                               {" | "}
-                              Attachments: {Array.isArray(preview?.attachments) ? preview.attachments.length : 0}
+                              Attachments:{" "}
+                              {Array.isArray(preview?.attachments)
+                                ? preview.attachments.length
+                                : 0}
                             </div>
                           </div>
                         );
@@ -2489,7 +2661,6 @@ export default function TriageEngine() {
               </div>
             )}
           </section>
-
         </section>
       )}
 
@@ -2513,7 +2684,8 @@ export default function TriageEngine() {
           )}
           {!canUsePartsNow && (
             <p className="text-xs text-slate-500">
-              Parts usage unlocks only after customer approval when repair is active.
+              Parts usage unlocks only after customer approval when repair is
+              active.
             </p>
           )}
           {partsActionMessage && (
@@ -2532,49 +2704,53 @@ export default function TriageEngine() {
               return (
                 <div
                   key={step.step_id}
-                  className="border border-slate-800 rounded p-3 space-y-2"
+                  className="bg-black/20 border border-slate-800 rounded p-3 space-y-4"
                 >
-                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-                    <div>
+                  {/* header + badges */}
+                  <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                    <div className="flex-1">
                       <div className="text-sm font-semibold">
                         {step.step_order}. {step.title}
                       </div>
                       <div className="text-sm leading-relaxed text-slate-300 mt-1">
                         {toReadableInstruction(step.instructions)}
                       </div>
-                      <div className="text-xs text-slate-400 mt-2">
-                        <span className="text-slate-500 uppercase text-[11px]">
-                          Capture
-                        </span>
-                        {": "}
-                        {toFriendlyList(step.required_inputs || []).join(" • ") ||
-                          "N/A"}
-                      </div>
-                      <div className="text-xs text-slate-400">
-                        <span className="text-slate-500 uppercase text-[11px]">
-                          Done when
-                        </span>
-                        {": "}
-                        {toFriendlyList(step.pass_criteria || []).join(", ") ||
-                          "N/A"}
-                      </div>
-                      <div className="text-xs text-slate-400">
-                        <span className="text-slate-500 uppercase text-[11px]">
-                          Recommended parts
-                        </span>
-                        {": "}
-                        {!canUsePartsNow || investigationOnly || step.suppressed
-                          ? "Shown once repair starts after customer approval."
-                          : (step.recommended_parts || []).join(", ") || "N/A"}
-                      </div>
                     </div>
-                    <div className="flex gap-2 text-[11px] font-semibold">
+                    <div className="flex flex-col gap-1 text-[11px] font-semibold">
                       <span className="px-2 py-1 rounded bg-red-900/20 border border-red-800 text-red-200">
                         {toFriendlyRisk(step.risk_level)}
                       </span>
                       <span className="px-2 py-1 rounded bg-slate-800 border border-slate-700 text-slate-200">
                         {toFriendlyStatus(step.status)}
                       </span>
+                    </div>
+                  </div>
+                  {/* detail fields */}
+                  <div className="space-y-1 text-xs text-slate-400">
+                    <div>
+                      <span className="text-slate-500 uppercase text-[11px]">
+                        Capture
+                      </span>
+                      {": "}
+                      {toFriendlyList(step.required_inputs || []).join(" • ") ||
+                        "N/A"}
+                    </div>
+                    <div>
+                      <span className="text-slate-500 uppercase text-[11px]">
+                        Done when
+                      </span>
+                      {": "}
+                      {toFriendlyList(step.pass_criteria || []).join(", ") ||
+                        "N/A"}
+                    </div>
+                    <div>
+                      <span className="text-slate-500 uppercase text-[11px]">
+                        Recommended parts
+                      </span>
+                      {": "}
+                      {!canUsePartsNow || investigationOnly || step.suppressed
+                        ? "Shown once repair starts after customer approval."
+                        : (step.recommended_parts || []).join(", ") || "N/A"}
                     </div>
                   </div>
 
@@ -2585,10 +2761,17 @@ export default function TriageEngine() {
                       </div>
                       {stepParts.map((part) => {
                         const partId = String(part?.part_id || "");
-                        const key = partUsageKey(step.step_id, partId || part?.part_name);
+                        const key = partUsageKey(
+                          step.step_id,
+                          partId || part?.part_name,
+                        );
                         const qtyValue = String(partQtyByKey[key] || "1");
                         const qtyOnHand = Number(part?.quantity_on_hand || 0);
-                        const canUse = canUsePartsNow && Boolean(createdJobId) && Boolean(partId) && qtyOnHand > 0;
+                        const canUse =
+                          canUsePartsNow &&
+                          Boolean(createdJobId) &&
+                          Boolean(partId) &&
+                          qtyOnHand > 0;
                         return (
                           <div
                             key={`${step.step_id}-${partId || part?.part_name || "unknown"}`}
@@ -2599,11 +2782,14 @@ export default function TriageEngine() {
                                 {part?.part_name || "Unknown part"}
                               </div>
                               <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                                <span className={`px-2 py-0.5 rounded border ${stockTone(part?.stock_status)}`}>
+                                <span
+                                  className={`px-2 py-0.5 rounded border ${stockTone(part?.stock_status)}`}
+                                >
                                   {part?.stock_status || "UNKNOWN"}
                                 </span>
                                 <span className="text-slate-400">
-                                  Qty: {qtyOnHand} | Part ID: {partId || "not in catalog"}
+                                  Qty: {qtyOnHand} | Part ID:{" "}
+                                  {partId || "not in catalog"}
                                 </span>
                               </div>
                             </div>
@@ -2613,7 +2799,10 @@ export default function TriageEngine() {
                                 onChange={(event) =>
                                   setPartQtyByKey((prev) => ({
                                     ...prev,
-                                    [key]: event.target.value.replace(/[^0-9]/g, ""),
+                                    [key]: event.target.value.replace(
+                                      /[^0-9]/g,
+                                      "",
+                                    ),
                                   }))
                                 }
                                 className="w-16 bg-black border border-slate-700 p-2 rounded text-xs"
@@ -2622,7 +2811,9 @@ export default function TriageEngine() {
                               <button
                                 type="button"
                                 disabled={!canUse || usingPartKey === key}
-                                onClick={() => handleUsePart(step.step_id, part)}
+                                onClick={() =>
+                                  handleUsePart(step.step_id, part)
+                                }
                                 className={`px-3 py-2 rounded text-xs font-semibold ${
                                   canUse
                                     ? "bg-cummins-red/30 border border-cummins-red hover:bg-cummins-red/40"
@@ -2642,55 +2833,59 @@ export default function TriageEngine() {
                     </div>
                   )}
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                    <input
-                      value={stepMeasurements[step.step_id] || ""}
-                      onChange={(event) =>
-                        setStepMeasurements((prev) => ({
-                          ...prev,
-                          [step.step_id]: event.target.value,
-                        }))
-                      }
-                      placeholder="Reading/number (optional)"
-                      className="bg-black border border-slate-700 p-2 rounded text-sm"
-                    />
-                    <input
-                      value={stepNotes[step.step_id] || ""}
-                      onChange={(event) =>
-                        setStepNotes((prev) => ({
-                          ...prev,
-                          [step.step_id]: event.target.value,
-                        }))
-                      }
-                      placeholder="What you observed (optional)"
-                      className="bg-black border border-slate-700 p-2 rounded text-sm"
-                    />
-                    <input
-                      value={attachmentCaptionByStep[step.step_id] || ""}
-                      onChange={(event) =>
-                        setAttachmentCaptionByStep((prev) => ({
-                          ...prev,
-                          [step.step_id]: event.target.value,
-                        }))
-                      }
-                      placeholder="Photo caption (optional)"
-                      className="bg-black border border-slate-700 p-2 rounded text-sm"
-                    />
-                    <label className="flex items-center gap-2 text-xs text-slate-300 p-2">
+                  <div className="bg-slate-800/20 border border-slate-700 rounded p-3 space-y-3">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                       <input
-                        type="checkbox"
-                        checked={Boolean(stepManualEscalation[step.step_id])}
-                        disabled
+                        value={stepMeasurements[step.step_id] || ""}
                         onChange={(event) =>
-                          setStepManualEscalation((prev) => ({
+                          setStepMeasurements((prev) => ({
                             ...prev,
-                            [step.step_id]: event.target.checked,
+                            [step.step_id]: event.target.value,
                           }))
                         }
+                        placeholder="Reading/number (optional)"
+                        className="bg-black border border-slate-700 p-2 rounded text-sm"
                       />
-                      Supervisor routing disabled in this flow
-                    </label>
-                    <div className="flex flex-wrap gap-2 items-center p-2">
+                      <input
+                        value={stepNotes[step.step_id] || ""}
+                        onChange={(event) =>
+                          setStepNotes((prev) => ({
+                            ...prev,
+                            [step.step_id]: event.target.value,
+                          }))
+                        }
+                        placeholder="What you observed (optional)"
+                        className="bg-black border border-slate-700 p-2 rounded text-sm"
+                      />
+                      <input
+                        value={attachmentCaptionByStep[step.step_id] || ""}
+                        onChange={(event) =>
+                          setAttachmentCaptionByStep((prev) => ({
+                            ...prev,
+                            [step.step_id]: event.target.value,
+                          }))
+                        }
+                        placeholder="Photo caption (optional)"
+                        className="bg-black border border-slate-700 p-2 rounded text-sm"
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <label className="flex items-center gap-2 text-xs text-slate-300">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(stepManualEscalation[step.step_id])}
+                          disabled
+                          onChange={(event) =>
+                            setStepManualEscalation((prev) => ({
+                              ...prev,
+                              [step.step_id]: event.target.checked,
+                            }))
+                          }
+                        />
+                        Supervisor routing disabled in this flow
+                      </label>
+                    </div>
+                    <div className="flex flex-wrap gap-2 items-center">
                       <label className="bg-sky-700 hover:bg-sky-600 px-3 py-1 rounded text-xs font-semibold cursor-pointer">
                         Take Photo
                         <input
@@ -2698,8 +2893,17 @@ export default function TriageEngine() {
                           accept="image/*"
                           capture="environment"
                           className="hidden"
-                          disabled={uploadingAttachmentStepId === step.step_id || !createdJobId}
-                          onChange={(event) => handleAttachmentSelection(step.step_id, "camera", event)}
+                          disabled={
+                            uploadingAttachmentStepId === step.step_id ||
+                            !createdJobId
+                          }
+                          onChange={(event) =>
+                            handleAttachmentSelection(
+                              step.step_id,
+                              "camera",
+                              event,
+                            )
+                          }
                         />
                       </label>
                       <label className="bg-indigo-700 hover:bg-indigo-600 px-3 py-1 rounded text-xs font-semibold cursor-pointer">
@@ -2708,12 +2912,23 @@ export default function TriageEngine() {
                           type="file"
                           accept="image/*"
                           className="hidden"
-                          disabled={uploadingAttachmentStepId === step.step_id || !createdJobId}
-                          onChange={(event) => handleAttachmentSelection(step.step_id, "gallery", event)}
+                          disabled={
+                            uploadingAttachmentStepId === step.step_id ||
+                            !createdJobId
+                          }
+                          onChange={(event) =>
+                            handleAttachmentSelection(
+                              step.step_id,
+                              "gallery",
+                              event,
+                            )
+                          }
                         />
                       </label>
                       {uploadingAttachmentStepId === step.step_id && (
-                        <span className="text-xs text-slate-400">Uploading image...</span>
+                        <span className="text-xs text-slate-400">
+                          Uploading image...
+                        </span>
                       )}
                     </div>
                   </div>
@@ -2733,7 +2948,9 @@ export default function TriageEngine() {
                             >
                               <img
                                 src={toAttachmentUrl(item.content_url)}
-                                alt={item.caption || item.filename || "Attachment"}
+                                alt={
+                                  item.caption || item.filename || "Attachment"
+                                }
                                 className="w-full h-24 object-cover rounded border border-slate-700"
                               />
                             </a>
@@ -2742,8 +2959,12 @@ export default function TriageEngine() {
                               queued
                             </div>
                           )}
-                          <div className="truncate text-slate-300">{item.filename || "attachment"}</div>
-                          <div className="truncate text-slate-500">{item.caption || "No caption"}</div>
+                          <div className="truncate text-slate-300">
+                            {item.filename || "attachment"}
+                          </div>
+                          <div className="truncate text-slate-500">
+                            {item.caption || "No caption"}
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -2789,7 +3010,8 @@ export default function TriageEngine() {
               >
                 <div className="font-mono text-slate-500">{entry.ts}</div>
                 <div className="text-slate-200">
-                  {entry.part_name_snapshot || entry.part_id} x{entry.quantity_used}
+                  {entry.part_name_snapshot || entry.part_id} x
+                  {entry.quantity_used}
                 </div>
                 <div className="text-slate-400">
                   Step: {entry.step_id} | Location: {entry.location}
@@ -2799,7 +3021,6 @@ export default function TriageEngine() {
           </div>
         </section>
       )}
-
     </div>
   );
 }
