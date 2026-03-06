@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 import re
 import sqlite3
 from pathlib import Path
@@ -10,6 +11,42 @@ from typing import Any
 DB_DIR = Path(__file__).resolve().parent
 LOCAL_DB_PATH = DB_DIR / "local.db"
 SERVER_DB_PATH = DB_DIR / "server.db"
+
+SUPERVISOR_ROLE = "supervisor"
+TECHNICIAN_ROLE = "technician"
+RESTOCK_STATUS_PENDING = "PENDING"
+RESTOCK_STATUS_FULFILLED = "FULFILLED"
+
+SYNTHETIC_PARTS_CATALOG = [
+    ("Water pump", "cooling"),
+    ("Thermostat", "cooling"),
+    ("Coolant hose set", "cooling"),
+    ("Radiator", "cooling"),
+    ("Fan clutch", "cooling"),
+    ("Coolant temperature sensor", "cooling"),
+    ("Brake line kit", "brake"),
+    ("Brake pressure sensor", "brake"),
+    ("ABS module", "brake"),
+    ("Fuel filter", "fuel"),
+    ("High-pressure fuel pump", "fuel"),
+    ("Injector set", "fuel"),
+    ("Injector harness", "fuel"),
+    ("Fuel rail", "fuel"),
+    ("Diagnostic harness kit", "general"),
+    ("General sensor service kit", "general"),
+    ("Alternator belt", "electrical"),
+    ("Battery", "electrical"),
+    ("Starter relay", "electrical"),
+]
+
+SYNTHETIC_PARTS_LOCATIONS = [
+    "Indy Yard",
+    "Columbus Depot",
+    "Remote Quarry",
+    "Tunnel Station",
+    "North Yard",
+    "South Yard",
+]
 
 
 def open_connection(db_path: Path) -> sqlite3.Connection:
@@ -179,6 +216,43 @@ def create_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS supervisor_ticket_ledger(
+            job_id TEXT PRIMARY KEY,
+            created_ts TEXT,
+            updated_ts TEXT,
+            status TEXT,
+            ticket_state TEXT,
+            workflow_mode TEXT,
+            equipment_id TEXT,
+            fault_code TEXT,
+            issue_text TEXT,
+            symptoms TEXT,
+            location TEXT,
+            customer_name TEXT,
+            customer_phone TEXT,
+            customer_email TEXT,
+            assigned_tech_id TEXT,
+            quote_total_usd REAL,
+            customer_decision TEXT,
+            closed_ts TEXT,
+            close_reason TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_supervisor_ticket_state_updated
+        ON supervisor_ticket_ledger(ticket_state, updated_ts)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_supervisor_ticket_status
+        ON supervisor_ticket_ledger(status)
+        """
+    )
+    conn.execute(
+        """
         CREATE INDEX IF NOT EXISTS idx_issue_records_status_updated
         ON issue_records(status, updated_ts)
         """
@@ -241,6 +315,93 @@ def create_schema(conn: sqlite3.Connection) -> None:
         ON issue_attachments(sha256)
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS parts_catalog(
+            part_id TEXT PRIMARY KEY,
+            part_name TEXT UNIQUE,
+            category TEXT,
+            unit TEXT DEFAULT 'each',
+            active INTEGER DEFAULT 1,
+            created_ts TEXT,
+            updated_ts TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS parts_inventory(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            part_id TEXT,
+            location TEXT,
+            quantity_on_hand INTEGER,
+            reorder_level INTEGER DEFAULT 2,
+            updated_ts TEXT,
+            UNIQUE(part_id, location)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS parts_usage_log(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT,
+            job_id TEXT,
+            step_id TEXT,
+            part_id TEXT,
+            part_name_snapshot TEXT,
+            location TEXT,
+            quantity_used INTEGER,
+            actor_id TEXT,
+            actor_role TEXT,
+            notes TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS parts_restock_requests(
+            request_id TEXT PRIMARY KEY,
+            ts TEXT,
+            job_id TEXT,
+            step_id TEXT,
+            part_id TEXT,
+            part_name_snapshot TEXT,
+            location TEXT,
+            requested_qty INTEGER,
+            status TEXT,
+            requested_by TEXT,
+            requested_role TEXT,
+            fulfilled_by TEXT,
+            fulfilled_ts TEXT,
+            notes TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_parts_inventory_location
+        ON parts_inventory(location, updated_ts)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_parts_inventory_part_location
+        ON parts_inventory(part_id, location)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_parts_usage_job_step
+        ON parts_usage_log(job_id, step_id, ts)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_parts_restock_status_ts
+        ON parts_restock_requests(status, ts)
+        """
+    )
     _ensure_column(conn, "jobs", "guided_question", "TEXT")
     _ensure_column(conn, "jobs", "guided_answer", "TEXT")
     _ensure_column(conn, "jobs", "approval_due_ts", "TEXT")
@@ -261,6 +422,9 @@ def create_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "issue_attachments", "sync_state", "TEXT")
     _ensure_column(conn, "issue_attachments", "sync_error", "TEXT")
     _ensure_column(conn, "issue_attachments", "vision_features_json", "TEXT")
+    _backfill_issue_records(conn)
+    _backfill_supervisor_ticket_ledger(conn)
+    _seed_parts_inventory_if_empty(conn)
 
 
 def _ensure_column(conn: sqlite3.Connection, table_name: str, column_name: str, column_def: str) -> None:
@@ -269,6 +433,78 @@ def _ensure_column(conn: sqlite3.Connection, table_name: str, column_name: str, 
     if column_name in existing_columns:
         return
     conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_def}")
+
+
+def _backfill_issue_records(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM jobs
+        WHERE job_id NOT IN (SELECT issue_id FROM issue_records)
+        """
+    ).fetchall()
+    if not rows:
+        return
+    for row in rows:
+        job = dict(row)
+        issue_record = _build_issue_record_from_job(job)
+        upsert_issue_record(conn, issue_record)
+
+
+def _backfill_supervisor_ticket_ledger(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM jobs
+        WHERE job_id NOT IN (SELECT job_id FROM supervisor_ticket_ledger)
+        """
+    ).fetchall()
+    if not rows:
+        return
+    for row in rows:
+        job = dict(row)
+        ticket = _build_supervisor_ticket_from_job(job)
+        upsert_supervisor_ticket(conn, ticket)
+
+
+def _to_part_id(name: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9]+", "-", str(name or "").strip().lower()).strip("-")
+    return f"part-{cleaned}" if cleaned else "part-unknown"
+
+
+def _seed_parts_inventory_if_empty(conn: sqlite3.Connection) -> None:
+    row = conn.execute("SELECT COUNT(*) AS count FROM parts_catalog").fetchone()
+    if int(row["count"]) > 0:
+        return
+
+    seeded_rng = random.Random(13)
+    for part_name, category in SYNTHETIC_PARTS_CATALOG:
+        part_id = _to_part_id(part_name)
+        conn.execute(
+            """
+            INSERT INTO parts_catalog(part_id, part_name, category, unit, active, created_ts, updated_ts)
+            VALUES (?, ?, ?, 'each', 1, NULL, NULL)
+            ON CONFLICT(part_id) DO UPDATE SET
+                part_name=excluded.part_name,
+                category=excluded.category,
+                unit='each',
+                active=1
+            """,
+            (part_id, part_name, category),
+        )
+        for location in SYNTHETIC_PARTS_LOCATIONS:
+            quantity = seeded_rng.randint(2, 25)
+            reorder_level = seeded_rng.randint(2, 5)
+            conn.execute(
+                """
+                INSERT INTO parts_inventory(part_id, location, quantity_on_hand, reorder_level, updated_ts)
+                VALUES (?, ?, ?, ?, NULL)
+                ON CONFLICT(part_id, location) DO UPDATE SET
+                    quantity_on_hand=excluded.quantity_on_hand,
+                    reorder_level=excluded.reorder_level
+                """,
+                (part_id, location, quantity, reorder_level),
+            )
 
 
 def _to_json(value: Any) -> str:
@@ -306,6 +542,71 @@ def _tokenize_tags(*values: str) -> list[str]:
             seen.add(token)
             tokens.append(token)
     return tokens[:40]
+
+
+CLOSED_TICKET_STATUSES = {"REPAIR_COMPLETED", "CUSTOMER_DECLINED", "DENIED"}
+
+
+def _ticket_state_from_status(status: Any) -> str:
+    normalized = str(status or "").upper()
+    if normalized in CLOSED_TICKET_STATUSES:
+        return "CLOSED"
+    return "OPEN"
+
+
+def _build_supervisor_ticket_from_job(job: dict[str, Any]) -> dict[str, Any]:
+    payload = _parse_json(job.get("field_payload_json")) or {}
+    final = _parse_json(job.get("final_response_json")) or {}
+    status = str(job.get("status", "")).upper()
+    ticket_state = _ticket_state_from_status(status)
+    workflow_mode = job.get("workflow_mode") or final.get("workflow_mode")
+    quote_package = final.get("quote_package") if isinstance(final.get("quote_package"), dict) else {}
+    customer_decision = final.get("customer_decision") if isinstance(final.get("customer_decision"), dict) else {}
+    repair_completion = final.get("repair_completion") if isinstance(final.get("repair_completion"), dict) else {}
+    supervisor_decision = final.get("supervisor_decision") if isinstance(final.get("supervisor_decision"), dict) else {}
+    customer_info = final.get("customer_info") if isinstance(final.get("customer_info"), dict) else {}
+
+    customer_name = str(payload.get("customer_name") or customer_info.get("name") or "").strip() or None
+    customer_phone = str(payload.get("customer_phone") or customer_info.get("phone") or "").strip() or None
+    customer_email = str(payload.get("customer_email") or customer_info.get("email") or "").strip() or None
+
+    closed_ts = None
+    close_reason = None
+    if ticket_state == "CLOSED":
+        if status == "REPAIR_COMPLETED":
+            closed_ts = repair_completion.get("ts") or job.get("updated_ts")
+            close_reason = "repair_completed"
+        elif status == "CUSTOMER_DECLINED":
+            closed_ts = customer_decision.get("ts") or job.get("updated_ts")
+            close_reason = "customer_declined"
+        elif status == "DENIED":
+            closed_ts = supervisor_decision.get("ts") or job.get("updated_ts")
+            close_reason = "denied"
+        else:
+            closed_ts = job.get("updated_ts")
+            close_reason = "closed"
+
+    return {
+        "job_id": str(job.get("job_id", "")),
+        "created_ts": job.get("created_ts"),
+        "updated_ts": job.get("updated_ts"),
+        "status": status,
+        "ticket_state": ticket_state,
+        "workflow_mode": workflow_mode,
+        "equipment_id": payload.get("equipment_id"),
+        "fault_code": payload.get("fault_code"),
+        "issue_text": payload.get("issue_text"),
+        "symptoms": payload.get("symptoms"),
+        "location": payload.get("location"),
+        "customer_name": customer_name,
+        "customer_phone": customer_phone,
+        "customer_email": customer_email,
+        "assigned_tech_id": job.get("assigned_tech_id"),
+        "quote_total_usd": quote_package.get("total_usd"),
+        "customer_decision": customer_decision.get("decision"),
+        "closed_ts": closed_ts,
+        "close_reason": close_reason,
+    }
 
 
 def _build_issue_record_from_job(job: dict[str, Any]) -> dict[str, Any]:
@@ -398,6 +699,59 @@ def upsert_issue_record(conn: sqlite3.Connection, record: dict[str, Any]) -> Non
     )
 
 
+def upsert_supervisor_ticket(conn: sqlite3.Connection, ticket: dict[str, Any]) -> None:
+    conn.execute(
+        """
+        INSERT INTO supervisor_ticket_ledger(
+            job_id, created_ts, updated_ts, status, ticket_state, workflow_mode,
+            equipment_id, fault_code, issue_text, symptoms, location,
+            customer_name, customer_phone, customer_email, assigned_tech_id,
+            quote_total_usd, customer_decision, closed_ts, close_reason
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(job_id) DO UPDATE SET
+            created_ts=excluded.created_ts,
+            updated_ts=excluded.updated_ts,
+            status=excluded.status,
+            ticket_state=excluded.ticket_state,
+            workflow_mode=excluded.workflow_mode,
+            equipment_id=excluded.equipment_id,
+            fault_code=excluded.fault_code,
+            issue_text=excluded.issue_text,
+            symptoms=excluded.symptoms,
+            location=excluded.location,
+            customer_name=excluded.customer_name,
+            customer_phone=excluded.customer_phone,
+            customer_email=excluded.customer_email,
+            assigned_tech_id=excluded.assigned_tech_id,
+            quote_total_usd=excluded.quote_total_usd,
+            customer_decision=excluded.customer_decision,
+            closed_ts=excluded.closed_ts,
+            close_reason=excluded.close_reason
+        """,
+        (
+            ticket["job_id"],
+            ticket.get("created_ts"),
+            ticket.get("updated_ts"),
+            ticket.get("status"),
+            ticket.get("ticket_state"),
+            ticket.get("workflow_mode"),
+            ticket.get("equipment_id"),
+            ticket.get("fault_code"),
+            ticket.get("issue_text"),
+            ticket.get("symptoms"),
+            ticket.get("location"),
+            ticket.get("customer_name"),
+            ticket.get("customer_phone"),
+            ticket.get("customer_email"),
+            ticket.get("assigned_tech_id"),
+            ticket.get("quote_total_usd"),
+            ticket.get("customer_decision"),
+            ticket.get("closed_ts"),
+            ticket.get("close_reason"),
+        ),
+    )
+
+
 def upsert_job(conn: sqlite3.Connection, job: dict[str, Any]) -> None:
     conn.execute(
         """
@@ -445,6 +799,8 @@ def upsert_job(conn: sqlite3.Connection, job: dict[str, Any]) -> None:
     )
     issue_record = _build_issue_record_from_job(job)
     upsert_issue_record(conn, issue_record)
+    supervisor_ticket = _build_supervisor_ticket_from_job(job)
+    upsert_supervisor_ticket(conn, supervisor_ticket)
 
 
 def upsert_job_lww(conn: sqlite3.Connection, job: dict[str, Any]) -> bool:
@@ -769,7 +1125,7 @@ def fetch_pending_approval_jobs(conn: sqlite3.Connection) -> list[dict[str, Any]
                j.approval_due_ts, j.timed_out, ir.attachment_count, ir.latest_attachment_ts
         FROM jobs j
         LEFT JOIN issue_records ir ON ir.issue_id = j.job_id
-        WHERE j.status IN ('PENDING_APPROVAL', 'TIMEOUT_HOLD')
+        WHERE j.status IN ('PENDING_APPROVAL', 'TIMEOUT_HOLD', 'PENDING_QUOTE_APPROVAL')
         ORDER BY j.updated_ts DESC
         """
     ).fetchall()
@@ -794,12 +1150,147 @@ def fetch_pending_approval_jobs(conn: sqlite3.Connection) -> list[dict[str, Any]
                 "fault_code": payload.get("fault_code"),
                 "symptoms": payload.get("symptoms"),
                 "location": payload.get("location"),
+                "approval_stage": final_response.get("approval_stage", "technical_workflow"),
                 "high_risk_failed_steps": _count_high_risk_failed_steps(conn, item["job_id"]),
                 "attachment_count": int(item.get("attachment_count", 0) or 0),
                 "latest_attachment_ts": item.get("latest_attachment_ts"),
             }
         )
     return pending
+
+
+def fetch_repair_pool_jobs(
+    conn: sqlite3.Connection,
+    *,
+    include_claimed: bool = True,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    statuses = ["REPAIR_POOL_OPEN"]
+    if include_claimed:
+        statuses.append("REPAIR_IN_PROGRESS")
+    placeholders = ", ".join("?" for _ in statuses)
+    rows = conn.execute(
+        f"""
+        SELECT j.job_id, j.created_ts, j.updated_ts, j.status, j.assigned_tech_id, j.field_payload_json,
+               j.final_response_json, ir.attachment_count, ir.latest_attachment_ts
+        FROM jobs j
+        LEFT JOIN issue_records ir ON ir.issue_id = j.job_id
+        WHERE j.status IN ({placeholders})
+        ORDER BY j.updated_ts DESC
+        LIMIT ?
+        """,
+        (*statuses, int(limit)),
+    ).fetchall()
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        payload = _parse_json(item.pop("field_payload_json")) or {}
+        final = _parse_json(item.pop("final_response_json")) or {}
+        workflow_steps = final.get("initial_workflow", [])
+        items.append(
+            {
+                "job_id": item["job_id"],
+                "created_ts": item.get("created_ts"),
+                "updated_ts": item.get("updated_ts"),
+                "status": item.get("status"),
+                "assigned_tech_id": item.get("assigned_tech_id"),
+                "equipment_id": payload.get("equipment_id"),
+                "fault_code": payload.get("fault_code"),
+                "issue_text": payload.get("issue_text"),
+                "symptoms": payload.get("symptoms"),
+                "location": payload.get("location"),
+                "workflow_mode": final.get("workflow_mode"),
+                "quote_total_usd": ((final.get("quote_package") or {}).get("total_usd")),
+                "customer_decision": (final.get("customer_decision") or {}).get("decision"),
+                "attachment_count": int(item.get("attachment_count", 0) or 0),
+                "latest_attachment_ts": item.get("latest_attachment_ts"),
+                "workflow_step_count": len(workflow_steps) if isinstance(workflow_steps, list) else 0,
+            }
+        )
+    return items
+
+
+def fetch_supervisor_ticket_ledger(
+    conn: sqlite3.Connection,
+    *,
+    ticket_state: str | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    state = str(ticket_state or "").upper().strip()
+    if state in {"OPEN", "CLOSED"}:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM supervisor_ticket_ledger
+            WHERE ticket_state = ?
+            ORDER BY updated_ts DESC
+            LIMIT ?
+            """,
+            (state, int(limit)),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM supervisor_ticket_ledger
+            ORDER BY updated_ts DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def fetch_customer_approval_jobs(
+    conn: sqlite3.Connection,
+    *,
+    include_rework: bool = True,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    statuses = ["AWAITING_CUSTOMER_APPROVAL"]
+    if include_rework:
+        statuses.append("QUOTE_REWORK_REQUIRED")
+    placeholders = ", ".join("?" for _ in statuses)
+    rows = conn.execute(
+        f"""
+        SELECT j.job_id, j.created_ts, j.updated_ts, j.status, j.field_payload_json, j.final_response_json,
+               ir.attachment_count, ir.latest_attachment_ts
+        FROM jobs j
+        LEFT JOIN issue_records ir ON ir.issue_id = j.job_id
+        WHERE j.status IN ({placeholders})
+        ORDER BY j.updated_ts DESC
+        LIMIT ?
+        """,
+        (*statuses, int(limit)),
+    ).fetchall()
+
+    queue: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        payload = _parse_json(item.pop("field_payload_json")) or {}
+        final = _parse_json(item.pop("final_response_json")) or {}
+        quote = final.get("quote_package") if isinstance(final.get("quote_package"), dict) else {}
+        email_draft = final.get("quote_email_draft") if isinstance(final.get("quote_email_draft"), dict) else {}
+        queue.append(
+            {
+                "job_id": item["job_id"],
+                "created_ts": item.get("created_ts"),
+                "updated_ts": item.get("updated_ts"),
+                "status": item.get("status"),
+                "equipment_id": payload.get("equipment_id"),
+                "fault_code": payload.get("fault_code"),
+                "symptoms": payload.get("symptoms"),
+                "location": payload.get("location"),
+                "quote_id": quote.get("quote_id"),
+                "quote_total_usd": quote.get("total_usd"),
+                "quote_subtotal_usd": quote.get("subtotal_usd"),
+                "customer_name": email_draft.get("recipient_name"),
+                "customer_email": email_draft.get("recipient_email"),
+                "attachment_count": int(item.get("attachment_count", 0) or 0),
+                "latest_attachment_ts": item.get("latest_attachment_ts"),
+            }
+        )
+    return queue
 
 
 def fetch_job_with_logs(conn: sqlite3.Connection, job_id: str) -> dict[str, Any] | None:
@@ -823,6 +1314,7 @@ def fetch_job_with_logs(conn: sqlite3.Connection, job_id: str) -> dict[str, Any]
         "attachments": get_job_attachments(conn, job_id),
         "workflow_steps": get_workflow_steps(conn, job_id),
         "workflow_events": fetch_workflow_events(conn, job_id),
+        "parts_usage": list_job_parts_usage(conn, job_id),
     }
 
 
@@ -912,7 +1404,7 @@ def fetch_overdue_pending_jobs(conn: sqlite3.Connection, now_ts: str) -> list[di
         """
         SELECT *
         FROM jobs
-        WHERE status = 'PENDING_APPROVAL'
+        WHERE status IN ('PENDING_APPROVAL', 'PENDING_QUOTE_APPROVAL')
           AND timed_out = 0
           AND approval_due_ts IS NOT NULL
           AND approval_due_ts <= ?
@@ -1182,3 +1674,353 @@ def fetch_agent_metrics(conn: sqlite3.Connection, day: str | None = None) -> lis
             """
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def upsert_part_catalog(conn: sqlite3.Connection, part: dict[str, Any]) -> dict[str, Any]:
+    part_name = str(part.get("part_name", "")).strip()
+    if not part_name:
+        raise ValueError("part_name is required")
+    part_id = str(part.get("part_id") or _to_part_id(part_name)).strip()
+    category = str(part.get("category") or "general").strip().lower()
+    unit = str(part.get("unit") or "each").strip().lower() or "each"
+    active = 1 if int(part.get("active", 1)) else 0
+    ts = part.get("updated_ts")
+    created_ts = part.get("created_ts")
+    conn.execute(
+        """
+        INSERT INTO parts_catalog(part_id, part_name, category, unit, active, created_ts, updated_ts)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(part_id) DO UPDATE SET
+            part_name=excluded.part_name,
+            category=excluded.category,
+            unit=excluded.unit,
+            active=excluded.active,
+            updated_ts=excluded.updated_ts
+        """,
+        (part_id, part_name, category, unit, active, created_ts, ts),
+    )
+    row = conn.execute(
+        """
+        SELECT part_id, part_name, category, unit, active, created_ts, updated_ts
+        FROM parts_catalog
+        WHERE part_id = ?
+        """,
+        (part_id,),
+    ).fetchone()
+    return dict(row) if row else {}
+
+
+def get_part_catalog_by_name(conn: sqlite3.Connection, part_name: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT part_id, part_name, category, unit, active, created_ts, updated_ts
+        FROM parts_catalog
+        WHERE lower(part_name) = lower(?)
+        """,
+        (str(part_name or "").strip(),),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def get_part_inventory(conn: sqlite3.Connection, part_id: str, location: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT c.part_id, c.part_name, c.category, c.unit, c.active,
+               i.location, i.quantity_on_hand, i.reorder_level, i.updated_ts
+        FROM parts_inventory i
+        JOIN parts_catalog c ON c.part_id = i.part_id
+        WHERE i.part_id = ? AND i.location = ?
+        """,
+        (part_id, location),
+    ).fetchone()
+    if not row:
+        return None
+    item = dict(row)
+    item["quantity_on_hand"] = int(item.get("quantity_on_hand", 0))
+    item["reorder_level"] = int(item.get("reorder_level", 0))
+    item["active"] = int(item.get("active", 1))
+    return item
+
+
+def upsert_part_inventory_row(
+    conn: sqlite3.Connection,
+    *,
+    part_id: str,
+    location: str,
+    quantity_on_hand: int,
+    reorder_level: int = 2,
+    updated_ts: str | None = None,
+) -> dict[str, Any]:
+    conn.execute(
+        """
+        INSERT INTO parts_inventory(part_id, location, quantity_on_hand, reorder_level, updated_ts)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(part_id, location) DO UPDATE SET
+            quantity_on_hand=excluded.quantity_on_hand,
+            reorder_level=excluded.reorder_level,
+            updated_ts=excluded.updated_ts
+        """,
+        (part_id, location, int(quantity_on_hand), int(reorder_level), updated_ts),
+    )
+    return get_part_inventory(conn, part_id, location) or {}
+
+
+def add_part_inventory_quantity(
+    conn: sqlite3.Connection,
+    *,
+    part_id: str,
+    location: str,
+    quantity_add: int,
+    updated_ts: str | None = None,
+) -> dict[str, Any]:
+    existing = get_part_inventory(conn, part_id, location)
+    if not existing:
+        return upsert_part_inventory_row(
+            conn,
+            part_id=part_id,
+            location=location,
+            quantity_on_hand=max(0, int(quantity_add)),
+            reorder_level=2,
+            updated_ts=updated_ts,
+        )
+    next_qty = int(existing.get("quantity_on_hand", 0)) + max(0, int(quantity_add))
+    return upsert_part_inventory_row(
+        conn,
+        part_id=part_id,
+        location=location,
+        quantity_on_hand=next_qty,
+        reorder_level=int(existing.get("reorder_level", 2)),
+        updated_ts=updated_ts,
+    )
+
+
+def decrement_part_inventory_atomic(
+    conn: sqlite3.Connection,
+    *,
+    part_id: str,
+    location: str,
+    quantity_use: int,
+    updated_ts: str | None = None,
+) -> bool:
+    qty = max(1, int(quantity_use))
+    cursor = conn.execute(
+        """
+        UPDATE parts_inventory
+        SET quantity_on_hand = quantity_on_hand - ?,
+            updated_ts = ?
+        WHERE part_id = ?
+          AND location = ?
+          AND quantity_on_hand >= ?
+        """,
+        (qty, updated_ts, part_id, location, qty),
+    )
+    return cursor.rowcount > 0
+
+
+def list_parts_inventory(
+    conn: sqlite3.Connection,
+    *,
+    location: str | None = None,
+    q: str | None = None,
+    active_only: bool = True,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    where: list[str] = []
+    params: list[Any] = []
+    if active_only:
+        where.append("c.active = 1")
+    if location:
+        where.append("i.location = ?")
+        params.append(str(location).strip())
+    if q:
+        where.append("(c.part_name LIKE ? OR c.category LIKE ? OR c.part_id LIKE ?)")
+        needle = f"%{str(q).strip()}%"
+        params.extend([needle, needle, needle])
+    where_clause = f"WHERE {' AND '.join(where)}" if where else ""
+    rows = conn.execute(
+        f"""
+        SELECT c.part_id, c.part_name, c.category, c.unit, c.active,
+               i.location, i.quantity_on_hand, i.reorder_level, i.updated_ts
+        FROM parts_inventory i
+        JOIN parts_catalog c ON c.part_id = i.part_id
+        {where_clause}
+        ORDER BY i.location ASC, c.part_name ASC
+        LIMIT ?
+        """,
+        (*params, int(limit)),
+    ).fetchall()
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["quantity_on_hand"] = int(item.get("quantity_on_hand", 0))
+        item["reorder_level"] = int(item.get("reorder_level", 0))
+        item["active"] = int(item.get("active", 1))
+        items.append(item)
+    return items
+
+
+def insert_parts_usage_log(conn: sqlite3.Connection, usage: dict[str, Any]) -> int:
+    cursor = conn.execute(
+        """
+        INSERT INTO parts_usage_log(
+            ts, job_id, step_id, part_id, part_name_snapshot, location,
+            quantity_used, actor_id, actor_role, notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            usage.get("ts"),
+            usage.get("job_id"),
+            usage.get("step_id"),
+            usage.get("part_id"),
+            usage.get("part_name_snapshot"),
+            usage.get("location"),
+            int(usage.get("quantity_used", 1)),
+            usage.get("actor_id"),
+            usage.get("actor_role"),
+            usage.get("notes"),
+        ),
+    )
+    return int(cursor.lastrowid)
+
+
+def list_job_parts_usage(conn: sqlite3.Connection, job_id: str) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT id, ts, job_id, step_id, part_id, part_name_snapshot, location,
+               quantity_used, actor_id, actor_role, notes
+        FROM parts_usage_log
+        WHERE job_id = ?
+        ORDER BY id DESC
+        """,
+        (job_id,),
+    ).fetchall()
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["quantity_used"] = int(item.get("quantity_used", 1))
+        items.append(item)
+    return items
+
+
+def insert_restock_request(conn: sqlite3.Connection, request: dict[str, Any]) -> None:
+    conn.execute(
+        """
+        INSERT INTO parts_restock_requests(
+            request_id, ts, job_id, step_id, part_id, part_name_snapshot, location,
+            requested_qty, status, requested_by, requested_role, fulfilled_by, fulfilled_ts, notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            request.get("request_id"),
+            request.get("ts"),
+            request.get("job_id"),
+            request.get("step_id"),
+            request.get("part_id"),
+            request.get("part_name_snapshot"),
+            request.get("location"),
+            int(request.get("requested_qty", 1)),
+            request.get("status", RESTOCK_STATUS_PENDING),
+            request.get("requested_by"),
+            request.get("requested_role"),
+            request.get("fulfilled_by"),
+            request.get("fulfilled_ts"),
+            request.get("notes"),
+        ),
+    )
+
+
+def update_restock_request_status(
+    conn: sqlite3.Connection,
+    *,
+    request_id: str,
+    status: str,
+    fulfilled_by: str | None = None,
+    fulfilled_ts: str | None = None,
+) -> bool:
+    cursor = conn.execute(
+        """
+        UPDATE parts_restock_requests
+        SET status = ?, fulfilled_by = ?, fulfilled_ts = ?
+        WHERE request_id = ?
+        """,
+        (status, fulfilled_by, fulfilled_ts, request_id),
+    )
+    return cursor.rowcount > 0
+
+
+def get_restock_request(conn: sqlite3.Connection, request_id: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM parts_restock_requests
+        WHERE request_id = ?
+        """,
+        (request_id,),
+    ).fetchone()
+    if not row:
+        return None
+    item = dict(row)
+    item["requested_qty"] = int(item.get("requested_qty", 1))
+    return item
+
+
+def list_restock_requests(
+    conn: sqlite3.Connection,
+    *,
+    status: str | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    if status:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM parts_restock_requests
+            WHERE status = ?
+            ORDER BY ts DESC
+            LIMIT ?
+            """,
+            (status, int(limit)),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM parts_restock_requests
+            ORDER BY ts DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["requested_qty"] = int(item.get("requested_qty", 1))
+        result.append(item)
+    return result
+
+
+def clear_runtime_data(conn: sqlite3.Connection) -> None:
+    tables = [
+        "parts_usage_log",
+        "parts_restock_requests",
+        "parts_inventory",
+        "parts_catalog",
+        "issue_attachments",
+        "workflow_events",
+        "workflow_steps",
+        "decision_log",
+        "sync_queue",
+        "supervisor_alerts",
+        "agent_metrics_daily",
+        "issue_records",
+        "supervisor_ticket_ledger",
+        "jobs",
+    ]
+    conn.execute("PRAGMA foreign_keys=OFF;")
+    try:
+        for table in tables:
+            conn.execute(f"DELETE FROM {table}")
+        seq_names = ",".join("?" for _ in tables)
+        conn.execute(f"DELETE FROM sqlite_sequence WHERE name IN ({seq_names})", tuple(tables))
+    finally:
+        conn.execute("PRAGMA foreign_keys=ON;")

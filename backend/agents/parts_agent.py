@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from backend.local_db import db
 
 
 MANUALS_DIR = Path(__file__).resolve().parents[1] / "knowledge_base" / "manuals"
@@ -56,7 +57,7 @@ def _load_chunks() -> list[dict[str, str]]:
     return chunks
 
 
-def _load_inventory() -> dict[str, dict[str, int]]:
+def _load_inventory_from_file() -> dict[str, dict[str, int]]:
     if not INVENTORY_PATH.exists():
         return {}
     try:
@@ -74,6 +75,26 @@ def _load_inventory() -> dict[str, dict[str, int]]:
         normalized[str(location)] = {
             str(part): int(qty) for part, qty in items.items() if isinstance(qty, int) or str(qty).isdigit()
         }
+    return normalized
+
+
+def _load_inventory() -> dict[str, dict[str, int]]:
+    try:
+        with db.open_local_connection() as conn:
+            rows = db.list_parts_inventory(conn, limit=5000)
+    except Exception:  # noqa: BLE001
+        rows = []
+    if not rows:
+        return _load_inventory_from_file()
+    normalized: dict[str, dict[str, int]] = {}
+    for row in rows:
+        location = str(row.get("location", "")).strip() or "Unknown"
+        if location not in normalized:
+            normalized[location] = {}
+        part_name = str(row.get("part_name", "")).strip()
+        if not part_name:
+            continue
+        normalized[location][part_name] = int(row.get("quantity_on_hand", 0))
     return normalized
 
 

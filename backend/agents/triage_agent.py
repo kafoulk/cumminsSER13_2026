@@ -114,6 +114,7 @@ def run_ollama_prompt(
     prompt: str,
     expect_json: bool = False,
     offline_mode: bool = False,
+    temperature: float = 0.2,
 ) -> tuple[Any | None, dict[str, Any]]:
     config = load_ollama_config()
     mode_effective = "offline" if offline_mode else "online"
@@ -139,7 +140,7 @@ def run_ollama_prompt(
                 "model": model_selected,
                 "prompt": prompt,
                 "stream": False,
-                "options": {"temperature": 0.2},
+                "options": {"temperature": max(0.0, min(1.0, float(temperature)))},
             },
             timeout=config["timeout_sec"],
         )

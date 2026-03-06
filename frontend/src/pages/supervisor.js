@@ -1,16 +1,29 @@
-import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, RefreshCw, ShieldCheck } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { AlertTriangle, PlusCircle, RefreshCw, ShieldCheck } from "lucide-react";
 import {
+  adjustPartInventory,
   approveJob,
   getApiBaseUrl,
-  getAgentMetrics,
   getJobDetails,
+  getPartsInventory,
+  getPartsRestockRequests,
   getSupervisorQueue,
+  getSupervisorTickets,
+  replenishPartInventory,
   replayOfflineQueue,
   syncOfflineQueue,
+  upsertPartCatalog,
 } from "../lib/api";
 
+function stockTone(status) {
+  const normalized = String(status || "").toUpperCase();
+  if (normalized === "OUT_OF_STOCK") return "text-red-300 border-red-700 bg-red-900/20";
+  if (normalized === "LOW_STOCK") return "text-amber-300 border-amber-700 bg-amber-900/20";
+  return "text-emerald-300 border-emerald-700 bg-emerald-900/20";
+}
+
 export default function Supervisor() {
+  const [activeMenu, setActiveMenu] = useState("approvals");
   const [approverName, setApproverName] = useState("Supervisor A");
   const [queue, setQueue] = useState([]);
   const [notesByJob, setNotesByJob] = useState({});
@@ -21,9 +34,40 @@ export default function Supervisor() {
   const [error, setError] = useState("");
   const [queueSourceMessage, setQueueSourceMessage] = useState("");
   const [lastRefreshTs, setLastRefreshTs] = useState("");
-  const [metrics, setMetrics] = useState([]);
+
+  const [ticketStateFilter, setTicketStateFilter] = useState("ALL");
+  const [ticketLedger, setTicketLedger] = useState([]);
+  const [ticketCounts, setTicketCounts] = useState({ open: 0, closed: 0 });
+  const [loadingTickets, setLoadingTickets] = useState(false);
+
   const [attachmentsByJob, setAttachmentsByJob] = useState({});
   const [loadingAttachmentsJobId, setLoadingAttachmentsJobId] = useState("");
+
+  const [partsQuery, setPartsQuery] = useState("");
+  const [partsLocation, setPartsLocation] = useState("");
+  const [partsInventory, setPartsInventory] = useState([]);
+  const [loadingParts, setLoadingParts] = useState(false);
+  const [restockRequests, setRestockRequests] = useState([]);
+  const [loadingRestock, setLoadingRestock] = useState(false);
+  const [busyRestockRequestId, setBusyRestockRequestId] = useState("");
+  const [adjustingPartKey, setAdjustingPartKey] = useState("");
+
+  const [newPartName, setNewPartName] = useState("");
+  const [newPartCategory, setNewPartCategory] = useState("general");
+  const [newPartLocation, setNewPartLocation] = useState("");
+  const [newPartInitialQty, setNewPartInitialQty] = useState("5");
+
+  const allTasks = Number(ticketCounts.open || 0) + Number(ticketCounts.closed || 0);
+  const pendingTasks = Number(ticketCounts.open || 0);
+  const pendingApprovals = Number(queue.length || 0);
+  const sortedPartLocations = useMemo(() => {
+    const values = new Set();
+    for (const item of partsInventory) {
+      const location = String(item?.location || "").trim();
+      if (location) values.add(location);
+    }
+    return Array.from(values).sort((a, b) => a.localeCompare(b));
+  }, [partsInventory]);
 
   function minutesPending(updatedTs) {
     if (!updatedTs) return 0;
@@ -48,7 +92,7 @@ export default function Supervisor() {
       setQueue(data.jobs || []);
       if (data.local_only) {
         setQueueSourceMessage(
-          data.detail || "Backend unreachable. Showing on-device queued supervisor items."
+          data.detail || "Backend unreachable. Showing on-device queued supervisor items.",
         );
       }
       setLastRefreshTs(new Date().toLocaleTimeString());
@@ -59,20 +103,53 @@ export default function Supervisor() {
     }
   }, []);
 
-  const loadMetrics = useCallback(async () => {
+  const loadTicketLedger = useCallback(async () => {
+    setLoadingTickets(true);
     try {
-      const data = await getAgentMetrics();
-      setMetrics(data.metrics || []);
+      const data = await getSupervisorTickets({
+        ticket_state: ticketStateFilter,
+        limit: 200,
+      });
+      setTicketLedger(data.tickets || []);
+      setTicketCounts({
+        open: Number(data.open_count || 0),
+        closed: Number(data.closed_count || 0),
+      });
     } catch {
-      setMetrics([]);
+      setTicketLedger([]);
+      setTicketCounts({ open: 0, closed: 0 });
+    } finally {
+      setLoadingTickets(false);
+    }
+  }, [ticketStateFilter]);
+
+  const loadPartsInventory = useCallback(async () => {
+    setLoadingParts(true);
+    try {
+      const data = await getPartsInventory({
+        q: partsQuery,
+        location: partsLocation,
+        limit: 800,
+      });
+      setPartsInventory(data.items || []);
+    } catch {
+      setPartsInventory([]);
+    } finally {
+      setLoadingParts(false);
+    }
+  }, [partsQuery, partsLocation]);
+
+  const loadRestockRequests = useCallback(async () => {
+    setLoadingRestock(true);
+    try {
+      const data = await getPartsRestockRequests({ status: "PENDING", limit: 200 });
+      setRestockRequests(data.requests || []);
+    } catch {
+      setRestockRequests([]);
+    } finally {
+      setLoadingRestock(false);
     }
   }, []);
-
-  useEffect(() => {
-    loadMetrics();
-    const interval = setInterval(loadMetrics, 12000);
-    return () => clearInterval(interval);
-  }, [loadMetrics]);
 
   useEffect(() => {
     loadQueue();
@@ -81,6 +158,26 @@ export default function Supervisor() {
     }, 8000);
     return () => clearInterval(interval);
   }, [loadQueue]);
+
+  useEffect(() => {
+    loadTicketLedger();
+    const interval = setInterval(() => {
+      loadTicketLedger();
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [loadTicketLedger]);
+
+  useEffect(() => {
+    loadPartsInventory();
+  }, [loadPartsInventory]);
+
+  useEffect(() => {
+    loadRestockRequests();
+    const interval = setInterval(() => {
+      loadRestockRequests();
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [loadRestockRequests]);
 
   async function handleDecision(jobId, decision) {
     if (!approverName.trim()) {
@@ -100,13 +197,13 @@ export default function Supervisor() {
       const result = await approveJob(payload);
       if (result.queued_offline) {
         setMessage(
-          `Decision queued offline (queue id ${result.queue_id}). It will replay when network is available.`
+          "Decision saved offline. It will sync when network is available.",
         );
       } else {
         setMessage(`Updated ${jobId} to ${result.status}.`);
       }
       await loadQueue();
-      await loadMetrics();
+      await loadTicketLedger();
     } catch (decisionError) {
       setError(decisionError.message);
     } finally {
@@ -130,15 +227,17 @@ export default function Supervisor() {
 
       if (serverResult) {
         setMessage(
-          `Local replay ${localReplay.synced}/${localReplay.processed}. Cloud sync processed=${serverResult.processed}, synced=${serverResult.synced}, failed=${serverResult.failed}.`
+          `Local replay ${localReplay.synced}/${localReplay.processed}. Cloud sync processed=${serverResult.processed}, synced=${serverResult.synced}, failed=${serverResult.failed}.`,
         );
       } else {
         setMessage(
-          `Local replay ${localReplay.synced}/${localReplay.processed}. Cloud sync pending (${serverError || "backend unreachable"}).`
+          `Local replay ${localReplay.synced}/${localReplay.processed}. Cloud sync pending (${serverError || "backend unreachable"}).`,
         );
       }
       await loadQueue();
-      await loadMetrics();
+      await loadTicketLedger();
+      await loadPartsInventory();
+      await loadRestockRequests();
     } catch (syncError) {
       setError(syncError.message);
     } finally {
@@ -162,23 +261,114 @@ export default function Supervisor() {
     }
   }
 
+  async function handleAddPart(event) {
+    event.preventDefault();
+    setError("");
+    setMessage("");
+    if (!newPartName.trim()) {
+      setError("Part name is required.");
+      return;
+    }
+    try {
+      const result = await upsertPartCatalog({
+        part_name: newPartName.trim(),
+        category: newPartCategory.trim() || "general",
+        unit: "each",
+        location: newPartLocation.trim() || null,
+        initial_quantity: Number(newPartInitialQty || 0),
+        actor_id: approverName.trim() || "Supervisor",
+        actor_role: "supervisor",
+      });
+      setMessage(`Saved part ${result?.part?.part_name || newPartName}.`);
+      setNewPartName("");
+      await loadPartsInventory();
+    } catch (partError) {
+      setError(partError.message);
+    }
+  }
+
+  async function handleFulfillRestock(request) {
+    setBusyRestockRequestId(String(request.request_id));
+    setError("");
+    setMessage("");
+    try {
+      const result = await replenishPartInventory({
+        part_id: request.part_id,
+        location: request.location,
+        quantity_add: Number(request.requested_qty || 1),
+        request_id: request.request_id,
+        actor_id: approverName.trim() || "Supervisor",
+        actor_role: "supervisor",
+      });
+      setMessage(
+        `Fulfilled restock ${request.request_id} (${result?.inventory?.part_name || request.part_id}).`,
+      );
+      await loadPartsInventory();
+      await loadRestockRequests();
+    } catch (restockError) {
+      setError(restockError.message);
+    } finally {
+      setBusyRestockRequestId("");
+    }
+  }
+
+  async function handleAdjustPart(item, delta) {
+    if (!item?.part_id || !item?.location || !delta) return;
+    const key = `${item.part_id}:${item.location}:${delta}`;
+    setAdjustingPartKey(key);
+    setError("");
+    setMessage("");
+    try {
+      const result = await adjustPartInventory({
+        part_id: item.part_id,
+        location: item.location,
+        quantity_delta: Number(delta),
+        actor_id: approverName.trim() || "Supervisor",
+        actor_role: "supervisor",
+      });
+      const nextQty = result?.inventory?.quantity_on_hand;
+      const deltaLabel = Number(delta) > 0 ? `+${delta}` : `${delta}`;
+      setMessage(`Adjusted ${item.part_name} (${deltaLabel}). New qty: ${nextQty}.`);
+      await loadPartsInventory();
+    } catch (adjustError) {
+      setError(adjustError.message);
+    } finally {
+      setAdjustingPartKey("");
+    }
+  }
+
+  async function handleRefreshActiveTab() {
+    if (activeMenu === "approvals") {
+      await loadQueue();
+      return;
+    }
+    if (activeMenu === "parts") {
+      await loadPartsInventory();
+      await loadRestockRequests();
+      return;
+    }
+    await loadTicketLedger();
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold">Supervisor Approval Queue</h1>
+          <h1 className="text-2xl font-bold">Supervisor Workspace</h1>
           <p className="text-xs text-slate-500 mt-1">
-            Auto-refresh every 8s. Last refresh: {lastRefreshTs || "not yet"}
+            Auto-refresh is active. Last refresh: {lastRefreshTs || "not yet"}
           </p>
         </div>
         <div className="flex gap-2">
           <button
-            onClick={loadQueue}
-            disabled={loading}
+            onClick={handleRefreshActiveTab}
+            disabled={loading || loadingParts || loadingTickets || loadingRestock}
             className="border border-slate-700 hover:border-slate-500 px-3 py-2 rounded text-sm flex items-center gap-2"
           >
             <RefreshCw size={14} />
-            {loading ? "Refreshing..." : "Refresh Queue"}
+            {loading || loadingParts || loadingTickets || loadingRestock
+              ? "Refreshing..."
+              : "Refresh"}
           </button>
           <button
             onClick={handleSync}
@@ -191,6 +381,32 @@ export default function Supervisor() {
         </div>
       </div>
 
+      <section className="bg-slate-900 border border-slate-800 p-3 rounded-xl">
+        <div className="text-xs uppercase tracking-wide text-slate-500 mb-2">
+          Supervisor Menu
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          {[
+            { id: "approvals", label: "Pending Approval" },
+            { id: "parts", label: "Parts" },
+            { id: "ledger", label: "Ticket Ledger" },
+          ].map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setActiveMenu(item.id)}
+              className={`px-3 py-2 rounded text-xs font-semibold border ${
+                activeMenu === item.id
+                  ? "bg-cummins-red/20 border-cummins-red text-white"
+                  : "bg-black/20 border-slate-700 text-slate-300 hover:border-slate-500"
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </section>
+
       <div className="bg-slate-900 border border-slate-800 p-3 rounded-xl">
         <label className="text-xs text-slate-400 block mb-1">Approver Name</label>
         <input
@@ -199,6 +415,24 @@ export default function Supervisor() {
           className="w-full md:w-80 bg-black border border-slate-700 p-2 rounded"
           placeholder="Supervisor Name"
         />
+      </div>
+
+      <div className="bg-slate-900 border border-slate-800 p-3 rounded-xl">
+        <div className="text-xs uppercase tracking-wide text-slate-500 mb-2">Taskbar</div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+          <div className="bg-black/30 border border-slate-800 rounded p-3">
+            <div className="text-[11px] uppercase tracking-wide text-slate-500">All Tasks</div>
+            <div className="text-2xl font-semibold text-slate-100">{allTasks}</div>
+          </div>
+          <div className="bg-amber-900/20 border border-amber-700/60 rounded p-3">
+            <div className="text-[11px] uppercase tracking-wide text-amber-300">Pending Tasks</div>
+            <div className="text-2xl font-semibold text-amber-200">{pendingTasks}</div>
+          </div>
+          <div className="bg-cyan-900/20 border border-cyan-700/60 rounded p-3">
+            <div className="text-[11px] uppercase tracking-wide text-cyan-300">Pending Approvals</div>
+            <div className="text-2xl font-semibold text-cyan-200">{pendingApprovals}</div>
+          </div>
+        </div>
       </div>
 
       {error && (
@@ -214,33 +448,16 @@ export default function Supervisor() {
         </div>
       )}
 
-      {queueSourceMessage && (
+      {activeMenu === "approvals" && queueSourceMessage && (
         <div className="bg-amber-900/20 border border-amber-600/50 p-3 rounded text-amber-100">
           {queueSourceMessage}
         </div>
       )}
 
-      <div className="bg-slate-900 border border-slate-800 rounded-xl">
-        <div className="p-4 border-b border-slate-800 font-semibold">Agent Performance (Local Metrics)</div>
-        {metrics.length === 0 && (
-          <div className="p-4 text-slate-400 text-sm">No metrics yet.</div>
-        )}
-        {metrics.slice(0, 6).map((item) => (
-          <div key={`${item.day}-${item.agent_id}`} className="p-3 border-b border-slate-800 last:border-b-0 text-sm">
-            <div className="font-mono text-xs text-slate-400">
-              {item.day} | {item.agent_id}
-            </div>
-            <div>
-              jobs={item.jobs_processed} escalations={item.escalations} approvals={item.approvals} denials=
-              {item.denials} replans={item.replans} mean_conf={Number(item.mean_confidence).toFixed(2)}
-            </div>
-          </div>
-        ))}
-      </div>
-
+      {activeMenu === "approvals" && (
       <div className="bg-slate-900 border border-slate-800 rounded-xl">
         <div className="p-4 border-b border-slate-800 font-semibold">
-          Pending Jobs: {queue.length}
+          Pending Approvals: {queue.length}
         </div>
         {queue.length === 0 && (
           <div className="p-4 text-slate-400 text-sm">No pending approvals.</div>
@@ -259,7 +476,7 @@ export default function Supervisor() {
                 <span className="text-slate-400">Symptoms:</span> {job.symptoms}
               </div>
               <div>
-                <span className="text-slate-400">Location:</span> {job.location || "N/A"}
+                <span className="text-slate-400">Location:</span> {job.location || "Not provided"}
               </div>
               <div>
                 <span className="text-slate-400">High-risk failed steps:</span>{" "}
@@ -272,28 +489,19 @@ export default function Supervisor() {
                 )}
               </div>
               <div>
-                <span className="text-slate-400">Escalation reasons:</span>{" "}
-                {(job.escalation_reasons || []).join(", ") || "N/A"}
+                <span className="text-slate-400">Why this needs review:</span>{" "}
+                {(job.escalation_reasons || []).join(", ") || "No reason listed"}
+              </div>
+              <div>
+                <span className="text-slate-400">Current stage:</span>{" "}
+                {job.approval_stage || "waiting for approval"}
               </div>
               <div>
                 <span className="text-slate-400">Attachments:</span> {job.attachment_count || 0}
               </div>
-              <div>
-                <span className="text-slate-400">Workflow mode:</span> {job.workflow_mode || "N/A"}
-              </div>
               <div className="text-xs text-slate-400">
-                {job.workflow_intent || "Investigation-only evidence checklist pending supervisor decision."}
-              </div>
-              <div>
-                <span className="text-slate-400">Risk source:</span>{" "}
-                {job.risk_signals?.source || "N/A"} | confidence={job.risk_signals?.confidence ?? "N/A"}
-              </div>
-              <div className="text-xs text-slate-400">
-                Matched safety terms: {(job.risk_signals?.matched_terms?.safety || []).join(", ") || "none"}
-              </div>
-              <div className="text-xs text-slate-400">
-                Matched warranty terms:{" "}
-                {(job.risk_signals?.matched_terms?.warranty || []).join(", ") || "none"}
+                {job.workflow_intent ||
+                  "Diagnostic checklist is in progress and waiting for supervisor decision."}
               </div>
             </div>
 
@@ -356,6 +564,229 @@ export default function Supervisor() {
           </div>
         ))}
       </div>
+      )}
+
+      {activeMenu === "parts" && (
+        <div className="space-y-4">
+          <section className="bg-slate-900 border border-slate-800 rounded-xl p-3 grid grid-cols-1 md:grid-cols-3 gap-2">
+            <input
+              value={partsQuery}
+              onChange={(event) => setPartsQuery(event.target.value)}
+              className="bg-black border border-slate-700 p-2 rounded text-sm"
+              placeholder="Search part/category/id"
+            />
+            <select
+              value={partsLocation}
+              onChange={(event) => setPartsLocation(event.target.value)}
+              className="bg-black border border-slate-700 p-2 rounded text-sm"
+            >
+              <option value="">All locations</option>
+              {sortedPartLocations.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+            <div className="text-xs text-slate-400 flex items-center">
+              Rows: {partsInventory.length}
+            </div>
+          </section>
+
+          <section className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
+            <div className="font-semibold text-sm inline-flex items-center gap-2">
+              <PlusCircle size={14} />
+              Add New Part
+            </div>
+            <form onSubmit={handleAddPart} className="grid grid-cols-1 md:grid-cols-4 gap-2">
+              <input
+                value={newPartName}
+                onChange={(event) => setNewPartName(event.target.value)}
+                className="bg-black border border-slate-700 p-2 rounded text-sm"
+                placeholder="New part name"
+              />
+              <input
+                value={newPartCategory}
+                onChange={(event) => setNewPartCategory(event.target.value)}
+                className="bg-black border border-slate-700 p-2 rounded text-sm"
+                placeholder="Category"
+              />
+              <input
+                value={newPartLocation}
+                onChange={(event) => setNewPartLocation(event.target.value)}
+                className="bg-black border border-slate-700 p-2 rounded text-sm"
+                placeholder="Initial location (optional)"
+              />
+              <div className="flex gap-2">
+                <input
+                  value={newPartInitialQty}
+                  onChange={(event) => setNewPartInitialQty(event.target.value)}
+                  className="bg-black border border-slate-700 p-2 rounded text-sm w-24"
+                  placeholder="Qty"
+                />
+                <button
+                  type="submit"
+                  className="bg-cummins-red hover:bg-red-700 px-3 py-2 rounded text-xs font-semibold"
+                >
+                  Add Part
+                </button>
+              </div>
+            </form>
+          </section>
+
+          <section className="bg-slate-900 border border-slate-800 rounded-xl">
+            <div className="p-4 border-b border-slate-800 font-semibold text-sm">
+              Pending Restock Requests ({restockRequests.length})
+            </div>
+            {loadingRestock && (
+              <div className="p-4 text-sm text-slate-400">Loading restock requests...</div>
+            )}
+            {!loadingRestock && restockRequests.length === 0 && (
+              <div className="p-4 text-sm text-slate-400">No pending requests.</div>
+            )}
+            {!loadingRestock &&
+              restockRequests.map((request) => (
+                <div
+                  key={request.request_id}
+                  className="p-4 border-b border-slate-800 last:border-b-0 space-y-2"
+                >
+                  <div className="text-xs font-mono text-slate-500">{request.request_id}</div>
+                  <div className="text-sm text-slate-200">
+                    {request.part_name_snapshot} | {request.location} | qty {request.requested_qty}
+                  </div>
+                  <div className="text-xs text-slate-400">
+                    Requested by {request.requested_by} ({request.requested_role})
+                  </div>
+                  <button
+                    onClick={() => handleFulfillRestock(request)}
+                    disabled={busyRestockRequestId === request.request_id}
+                    className="bg-emerald-800 hover:bg-emerald-700 disabled:opacity-50 px-3 py-1 rounded text-xs font-semibold"
+                  >
+                    {busyRestockRequestId === request.request_id ? "Fulfilling..." : "Fulfill Request"}
+                  </button>
+                </div>
+              ))}
+          </section>
+
+          <section className="bg-slate-900 border border-slate-800 rounded-xl">
+            <div className="p-4 border-b border-slate-800 font-semibold text-sm">
+              Inventory ({partsInventory.length})
+            </div>
+            {loadingParts && (
+              <div className="p-4 text-sm text-slate-400">Loading parts...</div>
+            )}
+            {!loadingParts && partsInventory.length === 0 && (
+              <div className="p-4 text-sm text-slate-400">No inventory rows found.</div>
+            )}
+            {!loadingParts &&
+              partsInventory.map((item) => (
+                <div
+                  key={`${item.part_id}-${item.location}`}
+                  className="p-4 border-b border-slate-800 last:border-b-0 space-y-1"
+                >
+                  <div className="text-sm font-semibold text-slate-200">{item.part_name}</div>
+                  <div className="text-xs text-slate-500 font-mono">{item.part_id}</div>
+                  <div className="text-xs text-slate-400">
+                    {item.category} | {item.location}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`px-2 py-0.5 rounded border text-[11px] ${stockTone(item.stock_status)}`}>
+                      {item.stock_status}
+                    </span>
+                    <span className="text-xs text-slate-300">
+                      Qty: {item.quantity_on_hand} (reorder {item.reorder_level})
+                    </span>
+                  </div>
+                  <div className="pt-1 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleAdjustPart(item, -1)}
+                      disabled={adjustingPartKey === `${item.part_id}:${item.location}:-1`}
+                      className="px-2 py-1 rounded border border-slate-700 hover:border-slate-500 text-xs font-semibold disabled:opacity-50"
+                    >
+                      {adjustingPartKey === `${item.part_id}:${item.location}:-1` ? "..." : "-1"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleAdjustPart(item, 1)}
+                      disabled={adjustingPartKey === `${item.part_id}:${item.location}:1`}
+                      className="px-2 py-1 rounded border border-slate-700 hover:border-slate-500 text-xs font-semibold disabled:opacity-50"
+                    >
+                      {adjustingPartKey === `${item.part_id}:${item.location}:1` ? "..." : "+1"}
+                    </button>
+                  </div>
+                </div>
+              ))}
+          </section>
+        </div>
+      )}
+
+      {activeMenu === "ledger" && (
+      <div className="bg-slate-900 border border-slate-800 rounded-xl">
+        <div className="p-4 border-b border-slate-800 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+          <div>
+            <div className="font-semibold">Ticket Ledger (Supervisor Only)</div>
+            <div className="text-xs text-slate-500 mt-1">
+              Open: {ticketCounts.open} | Closed: {ticketCounts.closed}
+            </div>
+          </div>
+          <div className="flex gap-2">
+            {["ALL", "OPEN", "CLOSED"].map((state) => (
+              <button
+                key={state}
+                type="button"
+                onClick={() => setTicketStateFilter(state)}
+                className={`px-3 py-1.5 rounded text-xs border ${
+                  ticketStateFilter === state
+                    ? "bg-cummins-red/20 border-cummins-red text-white"
+                    : "bg-black/20 border-slate-700 text-slate-300 hover:border-slate-500"
+                }`}
+              >
+                {state}
+              </button>
+            ))}
+          </div>
+        </div>
+        {loadingTickets && (
+          <div className="p-4 text-slate-400 text-sm">Loading ticket ledger...</div>
+        )}
+        {!loadingTickets && ticketLedger.length === 0 && (
+          <div className="p-4 text-slate-400 text-sm">No tickets found for this filter.</div>
+        )}
+        {!loadingTickets &&
+          ticketLedger.map((ticket) => (
+            <div key={`ledger-${ticket.job_id}`} className="p-4 border-b border-slate-800 last:border-b-0 text-sm">
+              <div className="font-mono text-xs text-slate-400">{ticket.job_id}</div>
+              <div className="mt-1">
+                <span className="text-slate-400">Status:</span> {ticket.status} |{" "}
+                <span className={ticket.ticket_state === "CLOSED" ? "text-emerald-300" : "text-amber-300"}>
+                  {ticket.ticket_state}
+                </span>
+              </div>
+              <div>
+                <span className="text-slate-400">Equipment:</span> {ticket.equipment_id || "N/A"} |{" "}
+                <span className="text-slate-400">Fault:</span> {ticket.fault_code || "N/A"}
+              </div>
+              <div>
+                <span className="text-slate-400">Customer:</span>{" "}
+                {ticket.customer_name || ticket.customer_email || ticket.customer_phone || "N/A"}
+              </div>
+              <div>
+                <span className="text-slate-400">Location:</span> {ticket.location || "N/A"} |{" "}
+                <span className="text-slate-400">Tech:</span> {ticket.assigned_tech_id || "unassigned"}
+              </div>
+              <div>
+                <span className="text-slate-400">Updated:</span> {ticket.updated_ts || "N/A"} |{" "}
+                <span className="text-slate-400">Age:</span> {minutesPending(ticket.updated_ts)} min
+              </div>
+              {ticket.ticket_state === "CLOSED" && (
+                <div className="text-xs text-slate-400 mt-1">
+                  Closed: {ticket.closed_ts || "N/A"} ({ticket.close_reason || "closed"})
+                </div>
+              )}
+            </div>
+          ))}
+      </div>
+      )}
     </div>
   );
 }

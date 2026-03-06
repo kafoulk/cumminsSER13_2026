@@ -67,7 +67,7 @@ export default function SettingsPage() {
       const modeNow = getAppMode();
       setAppModeState(modeNow);
       await loadDiagnostics(modeNow);
-      setMessage("Runtime diagnostics refreshed.");
+      setMessage("Status refreshed.");
     } catch (diagnosticError) {
       setError(diagnosticError.message);
     } finally {
@@ -80,8 +80,7 @@ export default function SettingsPage() {
       <section className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-4">
         <h1 className="text-xl font-bold">Mobile App Settings</h1>
         <p className="text-xs text-slate-400">
-          This is the primary mobile app runtime. Backend URL is configurable. Model route mode is automatic from
-          network state.
+          Set your backend address here. Online/offline model switching happens automatically.
         </p>
         <form onSubmit={handleSave} className="space-y-3">
           <label className="space-y-1 block">
@@ -112,7 +111,7 @@ export default function SettingsPage() {
               className="border border-slate-600 hover:border-slate-500 px-4 py-2 rounded text-sm"
               disabled={loading}
             >
-              {loading ? "Checking..." : "Refresh Diagnostics"}
+              {loading ? "Checking..." : "Refresh Status"}
             </button>
           </div>
         </form>
@@ -130,34 +129,31 @@ export default function SettingsPage() {
       )}
 
       <section className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-2">
-        <h2 className="font-semibold">Runtime Proof</h2>
+        <h2 className="font-semibold">Model Status</h2>
         <div className="text-sm text-slate-300">
-          mode_effective: <span className="font-mono">{runtimeInfo?.mode_effective || "N/A"}</span>
+          Current route: <span className="font-mono">{runtimeInfo?.mode_effective || "Not available"}</span>
         </div>
         <div className="text-sm text-slate-300">
-          model_selected: <span className="font-mono">{runtimeInfo?.model_selected || "N/A"}</span>
+          Model in use: <span className="font-mono">{runtimeInfo?.model_selected || "Not available"}</span>
         </div>
         <div className="text-sm text-slate-300">
-          model_tier: <span className="font-mono">{runtimeInfo?.model_tier || "N/A"}</span>
+          Model size: <span className="font-mono">{runtimeInfo?.model_tier || "Not available"}</span>
         </div>
         <div className="text-sm text-slate-300">
-          model_online: <span className="font-mono">{runtimeInfo?.model_online || "N/A"}</span>
+          Online model: <span className="font-mono">{runtimeInfo?.model_online || "Not available"}</span>
         </div>
         <div className="text-sm text-slate-300">
-          model_offline: <span className="font-mono">{runtimeInfo?.model_offline || "N/A"}</span>
-        </div>
-        <div className="text-xs text-slate-500">
-          policy_valid: {String(runtimeInfo?.model_policy_valid ?? "N/A")}
+          Offline model: <span className="font-mono">{runtimeInfo?.model_offline || "Not available"}</span>
         </div>
       </section>
 
       <section className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-2">
         <h2 className="font-semibold">Health Check</h2>
         <div className="text-sm text-slate-300">
-          status: <span className="font-mono">{healthInfo?.status || "N/A"}</span>
+          Service status: <span className="font-mono">{healthInfo?.status || "Not available"}</span>
         </div>
         <div className="text-sm text-slate-300">
-          ts: <span className="font-mono">{healthInfo?.ts || "N/A"}</span>
+          Last checked: <span className="font-mono">{healthInfo?.ts || "Not available"}</span>
         </div>
       </section>
     </div>

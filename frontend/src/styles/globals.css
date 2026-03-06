@@ -40,7 +40,7 @@ input, textarea, select, button {
 }
 */
 .safe-top {
-  padding-top: env(safe-area-inset-top);
+  padding-top: calc(env(safe-area-inset-top) + 10px);
 } 
 
 .safe-bottom {

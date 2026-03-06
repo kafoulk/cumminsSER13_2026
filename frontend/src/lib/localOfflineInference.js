@@ -277,17 +277,87 @@ function buildPlaybook(domain, safetyFlag) {
   return generic;
 }
 
+function friendlyInputLabel(token) {
+  const raw = String(token || "").trim().toLowerCase();
+  if (!raw) return "notes";
+  const exactMap = {
+    active_dtcs: "active fault codes",
+    abs_dtcs: "brake module fault codes",
+    freeze_frame: "snapshot data",
+    operating_context: "when the issue happens",
+    connector_notes: "connector condition notes",
+    harness_notes: "wire harness notes",
+    visual_condition_notes: "visual condition notes",
+    test_procedure: "test procedure used",
+    test_result: "test result",
+    measurement_value: "measured value",
+    engine_temp: "engine temperature",
+    ambient_temp: "outside temperature",
+    engine_load_pct: "engine load percent",
+    cooling_pressure_psi: "cooling pressure",
+    coolant_level_state: "coolant level state",
+    leak_notes: "leak notes",
+    fan_state: "fan state",
+    airflow_notes: "airflow notes",
+    radiator_condition: "radiator condition",
+    lockout_status: "lockout status",
+    hazard_assessment: "hazard assessment",
+    supervisor_notified: "supervisor notified status",
+    line_pressure: "line pressure",
+    pressure_drop_result: "pressure drop test result",
+    sensor_signal_state: "sensor signal state",
+    module_comm_state: "module communication status",
+    fuel_rail_pressure: "fuel rail pressure",
+    throttle_response_notes: "throttle response notes",
+    load_condition: "load condition",
+    filter_condition: "filter condition",
+    line_restriction_notes: "line restriction notes",
+    flow_assessment: "flow assessment",
+    injector_command_state: "injector command state",
+    harness_continuity: "wire continuity",
+    connector_condition: "connector condition",
+    sensor_pressure: "sensor pressure",
+    mechanical_pressure: "manual gauge pressure",
+    engine_state: "engine state",
+    oil_level: "oil level",
+    oil_grade: "oil grade",
+    observation_confirmation: "observation confirmation",
+    variance_notes: "difference notes",
+    dispatch_confirmation: "dispatch confirmation",
+    eta_commitment: "ETA commitment",
+    repair_plan_summary: "repair plan summary",
+    parts_confirmation: "parts confirmation",
+    handoff_notes: "handoff notes",
+  };
+  if (exactMap[raw]) return exactMap[raw];
+  const map = {
+    dtcs: "fault codes",
+    ecu: "computer data",
+    psi: "pressure",
+    pct: "percent",
+    abs: "brake system module",
+  };
+  const parts = raw
+    .split("_")
+    .map((part) => map[part] || part);
+  return parts.filter((part, index) => index === 0 || part !== parts[index - 1]).join(" ");
+}
+
 function composeActionableInstruction(step, recommendedParts, suppressRepairGuidance = false) {
-  const captureLine = `Capture: ${(step.required_inputs || []).join(", ") || "observation_notes"}.`;
-  const passLine = `Pass when: ${(step.pass_criteria || []).join(", ") || "Result recorded"}.`;
+  const captureValues = Array.isArray(step.required_inputs) ? step.required_inputs : [];
+  const passValues = Array.isArray(step.pass_criteria) ? step.pass_criteria : [];
+  const captureLine = `Record: ${
+    captureValues.slice(0, 3).map((item) => friendlyInputLabel(item)).join(", ") || "what you see"
+  }.`;
+  const passLine = `Done when: ${passValues.slice(0, 2).join(", ") || "the result is clearly recorded"}.`;
   const partsLine = suppressRepairGuidance
-    ? "Repair and parts guidance suppressed pending supervisor decision."
-    : `Parts to validate if failed: ${(recommendedParts || []).join(", ") || "none listed"}.`;
+    ? "Do not repair yet."
+    : `Check these parts if needed: ${(recommendedParts || []).slice(0, 3).join(", ") || "none listed"}.`;
   const escalateLine = suppressRepairGuidance
-    ? "If blocked/failed: capture evidence and escalate to supervisor."
+    ? "If this fails, stop and add notes for review."
     : step.risk_level === "HIGH" || step.risk_level === "CRITICAL"
-      ? "If blocked/failed: escalate to supervisor immediately."
-      : "If blocked/failed: record evidence and request replan/supervisor review if needed.";
+      ? "If this fails and the machine is unsafe, stop work and make it safe."
+      : "If this fails, add notes and move to the next check.";
   return `${step.instructions} ${captureLine} ${passLine} ${partsLine} ${escalateLine}`;
 }
 
@@ -440,6 +510,8 @@ function buildServiceReport(
 
   return [
     "Customer complaint",
+    `- Customer: ${payload?.customer_name || "N/A"}`,
+    `- Contact: ${payload?.customer_phone || payload?.customer_email || "N/A"}`,
     `- Equipment: ${payload?.equipment_id || "N/A"}`,
     `- Fault code: ${payload?.fault_code || "N/A"}`,
     `- Symptoms: ${payload?.symptoms || "N/A"}`,
@@ -545,27 +617,28 @@ export function runLocalOfflineJob(payload, queueInfo = {}) {
   if (warrantyHit) escalationReasons.push("warranty_signal");
   if (triage?.safety_flag) escalationReasons.push("triage_unsafe");
 
-  const requiresApproval = escalationReasons.length > 0;
-  const workflowMode = requiresApproval ? "INVESTIGATION_ONLY" : "FIX_PLAN";
-  const scheduleHint = inferSchedule(requiresApproval, triage);
+  const requiresApproval = false;
+  const workflowMode = "INVESTIGATION_ONLY";
+  const scheduleHint = inferSchedule(false, triage);
   const initialWorkflow = buildWorkflow(normalizedPayload, triage, evidence, scheduleHint, workflowMode);
 
   return {
     job_id: normalizedPayload?.job_id,
-    status: requiresApproval ? "PENDING_APPROVAL" : "READY",
+    status: "DIAGNOSTIC_IN_PROGRESS",
     requires_approval: requiresApproval,
     workflow_mode: workflowMode,
     workflow_intent:
       workflowMode === "INVESTIGATION_ONLY"
-        ? "Collect additional evidence for supervisor decision. Repair guidance suppressed."
+        ? "Run diagnostic checklist and prepare quote/customer handoff. Repair guidance suppressed until customer approval."
         : "Execute repair plan and verify fix.",
     allowed_actions:
       workflowMode === "INVESTIGATION_ONLY"
-        ? ["capture_observation", "capture_measurement", "attach_evidence", "request_supervisor_review"]
+        ? ["capture_observation", "capture_measurement", "attach_evidence", "prepare_quote"]
         : ["diagnose", "replace_part", "repair", "verify_fix", "closeout"],
     suppressed_guidance: workflowMode === "INVESTIGATION_ONLY",
     approval_due_ts: null,
     timed_out: false,
+    quote_stage: "DIAGNOSTIC_IN_PROGRESS",
     service_report: buildServiceReport(
       normalizedPayload,
       triage,

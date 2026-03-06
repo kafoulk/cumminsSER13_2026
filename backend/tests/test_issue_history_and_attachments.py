@@ -8,12 +8,14 @@ from pathlib import Path
 from backend.local_db import db
 from backend.main import (
     AttachmentUploadRequest,
+    DemoHistoryResetRequest,
     JobSubmitRequest,
     create_job,
     get_issue_history,
     get_job,
     get_job_attachments,
     get_similar_issues,
+    reset_demo_history,
     upload_job_attachment,
 )
 
@@ -88,6 +90,78 @@ class IssueHistoryAttachmentTests(unittest.TestCase):
             issue = db.get_issue_record(local_conn, created["job_id"])
         self.assertIsNotNone(issue)
         self.assertEqual(int((issue or {}).get("attachment_count", 0)), 1)
+
+    def test_attachment_upload_accepts_offline_step_alias(self) -> None:
+        created = create_job(
+            JobSubmitRequest(
+                equipment_id="EQ-9010",
+                fault_code="P0217",
+                symptoms="Coolant leak and temp rise",
+                notes="Captured while offline",
+                location="Remote Site",
+            )
+        )
+        image_bytes = b"\x89PNG\r\n\x1a\n" + (b"y" * 192)
+        encoded = base64.b64encode(image_bytes).decode("ascii")
+
+        uploaded = upload_job_attachment(
+            created["job_id"],
+            AttachmentUploadRequest(
+                step_id="offline-context-observation",
+                source="gallery",
+                filename="offline-intake.png",
+                mime_type="image/png",
+                image_base64=encoded,
+                caption="Offline alias step upload",
+            ),
+        )
+        self.assertEqual(uploaded["job_id"], created["job_id"])
+        self.assertEqual(uploaded["step_id"], "step-context-observation")
+        self.assertEqual(uploaded["attachment"]["step_id"], "step-context-observation")
+
+    def test_history_seed_reset_supports_two_matches_and_one_non_match(self) -> None:
+        seeded = reset_demo_history(DemoHistoryResetRequest(clear_server=False))
+        self.assertEqual(seeded.get("status"), "ok")
+        self.assertGreaterEqual(int(seeded.get("local_history_count", 0)), 3)
+
+        cooling_one = create_job(
+            JobSubmitRequest(
+                issue_text="Engine temp climbs quickly and coolant smell is strong near radiator.",
+                equipment_id="EQ-5001",
+                fault_code="P0217",
+                symptoms="Over-temp with coolant smell",
+                notes="Likely cooling loop issue",
+                location="Demo Yard A",
+            )
+        )
+        cooling_one_similar = get_similar_issues(cooling_one["job_id"], limit=5)
+        self.assertGreaterEqual(cooling_one_similar["count"], 2)
+
+        cooling_two = create_job(
+            JobSubmitRequest(
+                issue_text="Coolant leak at hose and overheating on incline.",
+                equipment_id="EQ-5002",
+                fault_code="P0217",
+                symptoms="Coolant leak and over-temp warning",
+                notes="Check thermostat and hoses",
+                location="Demo Yard B",
+            )
+        )
+        cooling_two_similar = get_similar_issues(cooling_two["job_id"], limit=5)
+        self.assertGreaterEqual(cooling_two_similar["count"], 2)
+
+        no_match = create_job(
+            JobSubmitRequest(
+                issue_text="Touchscreen keeps rebooting and GPS route drops every minute.",
+                equipment_id="EQ-9301",
+                fault_code="ELEC-771",
+                symptoms="Display reboot loop",
+                notes="No drivetrain symptoms",
+                location="Electronics Bay",
+            )
+        )
+        no_match_similar = get_similar_issues(no_match["job_id"], limit=5)
+        self.assertEqual(no_match_similar["count"], 0)
 
 
 if __name__ == "__main__":

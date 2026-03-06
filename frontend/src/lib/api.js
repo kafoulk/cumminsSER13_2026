@@ -175,49 +175,79 @@ async function getSupervisorQueueFallback() {
 
   for (const item of queued) {
     const method = String(item?.method || "").toUpperCase();
-    if (method !== "POST" || item?.path !== "/api/job") {
-      continue;
-    }
+    if (method !== "POST") continue;
 
+    const path = String(item?.path || "");
     const payload = item?.body || {};
     const queuedAt = item?.ts || new Date().toISOString();
-    const predicted = runLocalOfflineJob(
-      {
-        ...payload,
-        job_id: payload?.job_id || `queued-${item.id}`,
-        is_offline: true,
-      },
-      { queue_id: item.id, queued_at: queuedAt }
-    );
+    if (path === "/api/job") {
+      const predicted = runLocalOfflineJob(
+        {
+          ...payload,
+          job_id: payload?.job_id || `queued-${item.id}`,
+          is_offline: true,
+        },
+        { queue_id: item.id, queued_at: queuedAt }
+      );
 
-    if (!predicted?.requires_approval) {
+      if (!predicted?.requires_approval) {
+        continue;
+      }
+
+      const jobId = predicted?.job_id || payload?.job_id || `queued-${item.id}`;
+      pendingByJobId.set(jobId, {
+        job_id: jobId,
+        updated_ts: queuedAt,
+        status: "PENDING_APPROVAL",
+        requires_approval: 1,
+        workflow_mode: predicted?.workflow_mode || "INVESTIGATION_ONLY",
+        workflow_intent:
+          predicted?.workflow_intent ||
+          "Collect additional evidence for supervisor decision. Repair guidance suppressed.",
+        escalation_reasons: predicted?.escalation_reasons || ["queued_offline_client"],
+        risk_signals: predicted?.risk_signals || {},
+        approval_due_ts: null,
+        timed_out: 0,
+        equipment_id: payload?.equipment_id || "UNKNOWN_EQUIPMENT",
+        fault_code: payload?.fault_code || "UNKNOWN_FAULT",
+        symptoms: payload?.symptoms || payload?.issue_text || payload?.notes || "",
+        location: payload?.location || null,
+        approval_stage: "technical_workflow",
+        high_risk_failed_steps: 0,
+        attachment_count: 0,
+        latest_attachment_ts: null,
+        queued_offline: true,
+        queue_id: item.id,
+      });
       continue;
     }
 
-    const jobId = predicted?.job_id || payload?.job_id || `queued-${item.id}`;
-    pendingByJobId.set(jobId, {
-      job_id: jobId,
-      updated_ts: queuedAt,
-      status: "PENDING_APPROVAL",
-      requires_approval: 1,
-      workflow_mode: predicted?.workflow_mode || "INVESTIGATION_ONLY",
-      workflow_intent:
-        predicted?.workflow_intent ||
-        "Collect additional evidence for supervisor decision. Repair guidance suppressed.",
-      escalation_reasons: predicted?.escalation_reasons || ["queued_offline_client"],
-      risk_signals: predicted?.risk_signals || {},
-      approval_due_ts: null,
-      timed_out: 0,
-      equipment_id: payload?.equipment_id || "UNKNOWN_EQUIPMENT",
-      fault_code: payload?.fault_code || "UNKNOWN_FAULT",
-      symptoms: payload?.symptoms || payload?.issue_text || payload?.notes || "",
-      location: payload?.location || null,
-      high_risk_failed_steps: 0,
-      attachment_count: 0,
-      latest_attachment_ts: null,
-      queued_offline: true,
-      queue_id: item.id,
-    });
+    const quoteEmailMatch = path.match(/^\/api\/job\/([^/]+)\/quote\/email-draft$/);
+    if (quoteEmailMatch) {
+      const jobId = quoteEmailMatch[1];
+      pendingByJobId.set(jobId, {
+        job_id: jobId,
+        updated_ts: queuedAt,
+        status: "PENDING_QUOTE_APPROVAL",
+        requires_approval: 1,
+        workflow_mode: "INVESTIGATION_ONLY",
+        workflow_intent: "Quote email draft waiting for supervisor approval.",
+        escalation_reasons: ["queued_offline_quote_email"],
+        risk_signals: {},
+        approval_due_ts: null,
+        timed_out: 0,
+        equipment_id: "UNKNOWN_EQUIPMENT",
+        fault_code: "UNKNOWN_FAULT",
+        symptoms: "Quote email draft queued offline.",
+        location: null,
+        approval_stage: "QUOTE_EMAIL",
+        high_risk_failed_steps: 0,
+        attachment_count: 0,
+        latest_attachment_ts: null,
+        queued_offline: true,
+        queue_id: item.id,
+      });
+    }
   }
 
   const jobs = Array.from(pendingByJobId.values()).sort((a, b) => {
@@ -252,6 +282,26 @@ export async function getSupervisorQueue() {
   }
 }
 
+export function getSupervisorTickets(params = {}) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === null || value === undefined || value === "") return;
+    query.set(key, String(value));
+  });
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request(`/api/supervisor/tickets${suffix}`, { allowQueue: false });
+}
+
+export async function getCustomerApprovalQueue(params = {}) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === null || value === undefined || value === "") return;
+    query.set(key, String(value));
+  });
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request(`/api/customer/queue${suffix}`, { allowQueue: false });
+}
+
 export function approveJob(payload) {
   return request("/api/supervisor/approve", { method: "POST", body: payload });
 }
@@ -262,6 +312,51 @@ export function syncOfflineQueue() {
 
 export function getWorkflow(jobId) {
   return request(`/api/job/${jobId}/workflow`);
+}
+
+export function generateQuote(jobId) {
+  return request(`/api/job/${jobId}/quote`, {
+    method: "POST",
+    body: {},
+  });
+}
+
+export function draftQuoteEmail(jobId, payload = {}) {
+  return request(`/api/job/${jobId}/quote/email-draft`, {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export function recordCustomerApproval(jobId, payload) {
+  return request(`/api/job/${jobId}/customer-approval`, {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export function getRepairPool(params = {}) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === null || value === undefined || value === "") return;
+    query.set(key, String(value));
+  });
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request(`/api/repair/pool${suffix}`, { allowQueue: false });
+}
+
+export function claimRepairJob(jobId, payload) {
+  return request(`/api/repair/pool/${jobId}/claim`, {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export function completeRepairJob(jobId, payload) {
+  return request(`/api/repair/pool/${jobId}/complete`, {
+    method: "POST",
+    body: payload,
+  });
 }
 
 export function uploadJobAttachment(jobId, payload) {
@@ -277,6 +372,62 @@ export function getJobAttachments(jobId) {
 
 export function updateWorkflowStep(jobId, payload) {
   return request(`/api/job/${jobId}/workflow/step`, {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export function getPartsInventory(params = {}) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === null || value === undefined || value === "") return;
+    query.set(key, String(value));
+  });
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request(`/api/parts${suffix}`, { allowQueue: false });
+}
+
+export function getWorkflowParts(jobId) {
+  return request(`/api/job/${jobId}/workflow/parts`, { allowQueue: false });
+}
+
+export function getJobPartsUsage(jobId) {
+  return request(`/api/job/${jobId}/parts-usage`, { allowQueue: false });
+}
+
+export function usePartForStep(payload) {
+  return request("/api/parts/use", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export function getPartsRestockRequests(params = {}) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === null || value === undefined || value === "") return;
+    query.set(key, String(value));
+  });
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request(`/api/parts/restock-requests${suffix}`, { allowQueue: false });
+}
+
+export function upsertPartCatalog(payload) {
+  return request("/api/parts/catalog", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export function replenishPartInventory(payload) {
+  return request("/api/parts/replenish", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export function adjustPartInventory(payload) {
+  return request("/api/parts/adjust", {
     method: "POST",
     body: payload,
   });
@@ -308,6 +459,13 @@ export function getSimilarIssues(jobId, limit = 5) {
 
 export function getDemoScenarios() {
   return request("/api/demo/scenarios");
+}
+
+export function resetDemoHistory(payload = {}) {
+  return request("/api/demo/history/reset", {
+    method: "POST",
+    body: payload,
+  });
 }
 
 export function getRuntimeConfig(isOffline) {

@@ -9,6 +9,8 @@ This repository is now optimized for a **mobile app-first** workflow (iOS/Androi
   - `backend/agents/triage_agent.py`
   - `backend/agents/parts_agent.py`
   - `backend/agents/scheduler_agent.py` (minimal stub)
+  - `backend/agents/quote_agent.py`
+  - `backend/agents/email_agent.py`
 - SQLite stores:
   - Local system-of-record: `backend/local_db/local.db`
   - Demo server store: `backend/local_db/server.db`
@@ -115,13 +117,16 @@ Offline/online replay demo:
 
 The UI includes:
 - Technician page (`/`): submits jobs, runs actionable workflow steps, triggers replan, and shows decision/workflow logs.
+- Customer approvals page (`/customer-approval`): simple queue for recording customer approve/decline decisions.
+- Repair Pool page (`/repair-pool`): shows customer-approved tickets, lets technicians claim and complete work.
 - Supervisor page (`/supervisor`): loads pending queue, approve/deny actions, sync trigger, and local agent metrics.
 - Settings page (`/settings`): configures backend base URL and shows automatic mode/runtime diagnostics.
-- Note: Supervisor queue shows jobs in `PENDING_APPROVAL` and `TIMEOUT_HOLD` (not `READY` jobs).
+- Note: Supervisor queue shows jobs in `PENDING_APPROVAL`, `TIMEOUT_HOLD`, and `PENDING_QUOTE_APPROVAL` (not `READY` jobs).
 
 ## API Endpoints
 
 - `GET /api/demo/scenarios`
+- `POST /api/demo/history/reset`
 - `POST /api/job/intake`
 - `POST /api/job/{job_id}/guided-answer`
 - `POST /api/job`
@@ -129,6 +134,13 @@ The UI includes:
 - `GET /api/job/{job_id}/workflow`
 - `POST /api/job/{job_id}/workflow/step`
 - `POST /api/job/{job_id}/replan`
+- `POST /api/job/{job_id}/quote`
+- `POST /api/job/{job_id}/quote/email-draft`
+- `POST /api/job/{job_id}/customer-approval`
+- `GET /api/customer/queue`
+- `GET /api/repair/pool`
+- `POST /api/repair/pool/{job_id}/claim`
+- `POST /api/repair/pool/{job_id}/complete`
 - `POST /api/job/{job_id}/attachments`
 - `GET /api/job/{job_id}/attachments`
 - `GET /api/attachments/{attachment_id}/content`
@@ -156,6 +168,23 @@ curl -X POST http://127.0.0.1:9054/api/job \
     "location": "Indianapolis Yard"
   }'
 ```
+
+## Similar-Issue Demo Seed (Reset + Preload)
+
+Reset local/server demo DB and preload historical jobs:
+
+```bash
+curl -X POST http://127.0.0.1:9054/api/demo/history/reset \
+  -H "Content-Type: application/json" \
+  -d '{"clear_server": true}'
+```
+
+Then run these three preloaded demo patterns:
+- Match example A: cooling over-temp (`P0217`) should return similar historical jobs.
+- Match example B: coolant leak + over-temp (`P0217`) should return similar historical jobs.
+- No-match example: electronics reboot (`ELEC-771`) should return no strong similar jobs.
+
+You can also load these from the Technician `Demo tools` scenario dropdown.
 
 Free-text-first behavior:
 - `issue_text` is the primary field.
@@ -198,6 +227,64 @@ curl -s -X POST http://127.0.0.1:9054/api/job/<JOB_ID>/guided-answer \
 Compatibility note:
 - `POST /api/job` still works for existing clients.
 - If `guided_answer` is omitted on `POST /api/job`, backend logs a compatibility fallback answer (`GUIDED_COMPAT_FALLBACK_USED`).
+
+## Quote -> Customer -> Repair Flow
+
+1) Generate quote package:
+
+```bash
+curl -X POST http://127.0.0.1:9054/api/job/<JOB_ID>/quote
+```
+
+2) Generate customer email draft and route to supervisor queue:
+
+```bash
+curl -X POST http://127.0.0.1:9054/api/job/<JOB_ID>/quote/email-draft \
+  -H "Content-Type: application/json" \
+  -d '{
+    "recipient_name": "Fleet Manager",
+    "recipient_email": "fleet@example.com"
+  }'
+```
+
+3) Supervisor approves/denies quote email with existing endpoint:
+
+```bash
+curl -X POST http://127.0.0.1:9054/api/supervisor/approve \
+  -H "Content-Type: application/json" \
+  -d '{
+    "job_id": "<JOB_ID>",
+    "approver_name": "Supervisor A",
+    "decision": "approve",
+    "notes": "Ready to send to customer."
+  }'
+```
+
+4) Record customer decision:
+
+```bash
+curl -X POST http://127.0.0.1:9054/api/job/<JOB_ID>/customer-approval \
+  -H "Content-Type: application/json" \
+  -d '{
+    "decision": "approve",
+    "actor_id": "field_technician",
+    "notes": "Customer approved over phone."
+  }'
+```
+
+5) Claim from repair pool and complete:
+
+```bash
+curl http://127.0.0.1:9054/api/repair/pool
+
+curl -X POST http://127.0.0.1:9054/api/repair/pool/<JOB_ID>/claim \
+  -H "Content-Type: application/json" \
+  -d '{"technician_id":"tech-001","technician_name":"Field Technician"}'
+
+curl -X POST http://127.0.0.1:9054/api/repair/pool/<JOB_ID>/complete \
+  -H "Content-Type: application/json" \
+  -d '{"technician_id":"tech-001","notes":"Repair verified."}'
+```
 
 ## Demo Scenario Endpoint
 

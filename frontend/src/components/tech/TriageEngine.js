@@ -2,25 +2,46 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Mic } from "lucide-react";
 import { SpeechRecognition } from "@capacitor-community/speech-recognition";
 import {
+  claimRepairJob,
+  completeRepairJob,
+  draftQuoteEmail,
+  generateQuote,
+  getCustomerApprovalQueue,
   getDemoScenarios,
+  getJobPartsUsage,
+  getSimilarIssues,
   getApiBaseUrl,
   getJobAttachments,
   getJobDetails,
   getJobTimeline,
+  getRepairPool,
+  getWorkflowParts,
+  resetDemoHistory,
+  recordCustomerApproval,
   getWorkflow,
   replanJob,
   submitJob,
   uploadJobAttachment,
+  usePartForStep,
   updateWorkflowStep,
 } from "../../lib/api";
 
 const defaultForm = {
   issue_text: "Engine temp rising under load with coolant smell near radiator.",
+  customer_name: "",
+  customer_phone: "",
+  customer_email: "",
   equipment_id: "",
   fault_code: "",
   location: "Indy Yard",
   request_supervisor_review: false,
 };
+const ACTIVE_JOB_SNAPSHOT_KEY = "cummins_active_job_snapshot_v1";
+const ISSUE_ATTACHMENT_STEP_ID = "step-context-observation";
+const ISSUE_ATTACHMENT_STEP_FALLBACKS = [
+  ISSUE_ATTACHMENT_STEP_ID,
+  "offline-context-observation",
+];
 
 function getSpeechRecognitionCtor() {
   if (typeof window === "undefined") return null;
@@ -67,6 +88,133 @@ function toFriendlyRisk(riskLevel) {
   return "Low risk";
 }
 
+function toFriendlyStatus(status) {
+  const normalized = String(status || "").toLowerCase();
+  if (normalized === "done") return "Done";
+  if (normalized === "failed") return "Did not work";
+  if (normalized === "blocked") return "Needs help";
+  return "Pending";
+}
+
+function stockTone(status) {
+  const normalized = String(status || "").toUpperCase();
+  if (normalized === "OUT_OF_STOCK") {
+    return "text-red-300 border-red-700 bg-red-900/20";
+  }
+  if (normalized === "LOW_STOCK") {
+    return "text-amber-300 border-amber-700 bg-amber-900/20";
+  }
+  if (normalized === "UNKNOWN") {
+    return "text-slate-300 border-slate-600 bg-slate-800/40";
+  }
+  return "text-emerald-300 border-emerald-700 bg-emerald-900/20";
+}
+
+function toReadableInstruction(rawInstruction) {
+  const compact = String(rawInstruction || "").replace(/\s+/g, " ").trim();
+  if (!compact) return "Follow this checklist step and record what you find.";
+  const markerMatch = compact.match(
+    /^(.*?)(?:\s(?:Record:|Capture:|Pass when:|Parts to validate|If blocked\/failed:|Repair and parts guidance).*)$/i,
+  );
+  const cleaned = (markerMatch?.[1] || compact).trim();
+  if (!cleaned) return "Follow this checklist step and record what you find.";
+  return cleaned.endsWith(".") ? cleaned : `${cleaned}.`;
+}
+
+function toFriendlyToken(token) {
+  const raw = String(token || "").trim().toLowerCase();
+  if (!raw) return "";
+  const exactMap = {
+    active_dtcs: "active fault codes",
+    abs_dtcs: "brake module fault codes",
+    freeze_frame: "snapshot data",
+    operating_context: "when the issue happens",
+    connector_notes: "connector condition notes",
+    harness_notes: "wire harness notes",
+    component_visual_notes: "visual condition notes",
+    visual_condition_notes: "visual condition notes",
+    test_procedure: "test procedure used",
+    test_result: "test result",
+    observed_result: "observed result",
+    measurement_value: "measured value",
+    engine_temp: "engine temperature",
+    ambient_temp: "outside temperature",
+    engine_load_pct: "engine load percent",
+    cooling_pressure_psi: "cooling pressure",
+    coolant_level_state: "coolant level state",
+    leak_inspection_notes: "leak inspection notes",
+    leak_notes: "leak notes",
+    fan_engagement_state: "fan engagement state",
+    fan_state: "fan state",
+    airflow_obstruction_notes: "airflow obstruction notes",
+    airflow_notes: "airflow notes",
+    radiator_condition: "radiator condition",
+    thermostat_observation: "thermostat behavior",
+    pump_flow_assessment: "pump flow assessment",
+    coolant_return_temp: "coolant return temperature",
+    lockout_status: "lockout status",
+    hazard_assessment: "hazard assessment",
+    supervisor_notification: "supervisor notified status",
+    supervisor_notified: "supervisor notified status",
+    line_pressure: "line pressure",
+    pressure_drop_test: "pressure drop test result",
+    pressure_drop_result: "pressure drop test result",
+    sensor_signal_check: "sensor signal check",
+    sensor_signal_state: "sensor signal state",
+    module_comm_status: "module communication status",
+    module_comm_state: "module communication status",
+    fuel_rail_pressure: "fuel rail pressure",
+    load_condition: "load condition",
+    throttle_response_notes: "throttle response notes",
+    filter_condition: "filter condition",
+    line_restriction_notes: "line restriction notes",
+    flow_assessment: "flow assessment",
+    injector_command_state: "injector command state",
+    harness_continuity: "wire continuity",
+    connector_condition: "connector condition",
+    sensor_pressure: "sensor pressure",
+    mechanical_gauge_pressure: "manual gauge pressure",
+    mechanical_pressure: "manual gauge pressure",
+    engine_state: "engine state",
+    oil_level: "oil level",
+    oil_grade: "oil grade",
+    observation_confirmation: "observation confirmation",
+    variance_notes: "difference notes",
+    checkpoint_confirmation: "checkpoint confirmation",
+    dispatch_confirmation: "dispatch confirmation",
+    eta_commitment: "ETA commitment",
+    evidence_summary: "evidence summary",
+    open_questions: "open questions",
+    handoff_notes: "handoff notes",
+    repair_plan_summary: "repair plan summary",
+    parts_confirmation: "parts confirmation",
+  };
+  if (exactMap[raw]) return exactMap[raw];
+  const map = {
+    dtcs: "fault codes",
+    ecu: "computer data",
+    psi: "pressure",
+    pct: "percent",
+    abs: "brake system module",
+  };
+  const parts = raw
+    .split("_")
+    .map((part) => map[part] || part);
+  return parts.filter((part, index) => index === 0 || part !== parts[index - 1]).join(" ");
+}
+
+function toFriendlyList(values) {
+  if (!Array.isArray(values)) return [];
+  return values
+    .map((item) => {
+      const value = String(item || "").trim();
+      if (!value) return "";
+      if (value.includes("_")) return toFriendlyToken(value);
+      return value;
+    })
+    .filter(Boolean);
+}
+
 function toGroupedAttachments(attachments) {
   const grouped = {};
   for (const item of attachments || []) {
@@ -75,6 +223,36 @@ function toGroupedAttachments(attachments) {
     grouped[stepId].push(item);
   }
   return grouped;
+}
+
+function truncateText(value, maxLen = 280) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return "N/A";
+  if (text.length <= maxLen) return text;
+  return `${text.slice(0, maxLen - 1)}...`;
+}
+
+function loadActiveJobSnapshot() {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(ACTIVE_JOB_SNAPSHOT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    if (!parsed.result || !parsed.result.job_id) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function saveActiveJobSnapshot(snapshot) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(ACTIVE_JOB_SNAPSHOT_KEY, JSON.stringify(snapshot));
+  } catch {
+    // Ignore local storage write errors.
+  }
 }
 
 function fileToBase64(file) {
@@ -104,10 +282,21 @@ export default function TriageEngine() {
   const [loadingTimeline, setLoadingTimeline] = useState(false);
   const [scenarioCatalog, setScenarioCatalog] = useState([]);
   const [selectedScenario, setSelectedScenario] = useState("");
+  const [similarIssues, setSimilarIssues] = useState([]);
+  const [loadingSimilarIssues, setLoadingSimilarIssues] = useState(false);
+  const [similarPreviewLoadingJobId, setSimilarPreviewLoadingJobId] = useState("");
+  const [similarPreviewExpandedJobId, setSimilarPreviewExpandedJobId] = useState("");
+  const [similarPreviewByJobId, setSimilarPreviewByJobId] = useState({});
+  const [historySeedBusy, setHistorySeedBusy] = useState(false);
+  const [historySeedMessage, setHistorySeedMessage] = useState("");
+  const [historyDemoSeeded, setHistoryDemoSeeded] = useState(false);
   const [stepNotes, setStepNotes] = useState({});
   const [stepMeasurements, setStepMeasurements] = useState({});
   const [stepManualEscalation, setStepManualEscalation] = useState({});
   const [attachmentsByStep, setAttachmentsByStep] = useState({});
+  const [pendingIssuePhotos, setPendingIssuePhotos] = useState([]);
+  const [issuePhotoCaption, setIssuePhotoCaption] = useState("");
+  const [uploadingIssuePhotos, setUploadingIssuePhotos] = useState(false);
   const [attachmentCaptionByStep, setAttachmentCaptionByStep] = useState({});
   const [uploadingAttachmentStepId, setUploadingAttachmentStepId] = useState("");
   const [updatingStepId, setUpdatingStepId] = useState("");
@@ -115,6 +304,31 @@ export default function TriageEngine() {
   const [listening, setListening] = useState(false);
   const [speechHint, setSpeechHint] = useState("");
   const [error, setError] = useState("");
+  const [quoteBusy, setQuoteBusy] = useState(false);
+  const [emailBusy, setEmailBusy] = useState(false);
+  const [customerBusy, setCustomerBusy] = useState(false);
+  const [customerQueue, setCustomerQueue] = useState([]);
+  const [openTickets, setOpenTickets] = useState([]);
+  const [loadingCustomerQueue, setLoadingCustomerQueue] = useState(false);
+  const [loadingOpenTickets, setLoadingOpenTickets] = useState(false);
+  const [customerQueueBusyJobId, setCustomerQueueBusyJobId] = useState("");
+  const [openTicketBusyJobId, setOpenTicketBusyJobId] = useState("");
+  const [queueActionMessage, setQueueActionMessage] = useState("");
+  const [completeBusy, setCompleteBusy] = useState(false);
+  const [completionNotes, setCompletionNotes] = useState("");
+  const [workflowPartsByStep, setWorkflowPartsByStep] = useState({});
+  const [workflowPartsLocation, setWorkflowPartsLocation] = useState("");
+  const [workflowPartsEnabled, setWorkflowPartsEnabled] = useState(false);
+  const [workflowPartsStatus, setWorkflowPartsStatus] = useState("");
+  const [partsUsage, setPartsUsage] = useState([]);
+  const [loadingWorkflowParts, setLoadingWorkflowParts] = useState(false);
+  const [usingPartKey, setUsingPartKey] = useState("");
+  const [partQtyByKey, setPartQtyByKey] = useState({});
+  const [partsActionMessage, setPartsActionMessage] = useState("");
+  const [workflowActionMessage, setWorkflowActionMessage] = useState("");
+  const [quoteRecipientName, setQuoteRecipientName] = useState("");
+  const [quoteRecipientEmail, setQuoteRecipientEmail] = useState("");
+  const [activeMenu, setActiveMenu] = useState("capture");
 
   const speechRecognitionRef = useRef(null);
   const speechModeRef = useRef("none");
@@ -123,19 +337,87 @@ export default function TriageEngine() {
   const createdJobId = useMemo(() => result?.job_id || "", [result]);
   const workflowMode = useMemo(() => {
     if (result?.workflow_mode) return result.workflow_mode;
+    const status = String(result?.status || "").toUpperCase();
+    if (
+      [
+        "DIAGNOSTIC_IN_PROGRESS",
+        "PENDING_QUOTE_APPROVAL",
+        "AWAITING_CUSTOMER_APPROVAL",
+        "QUOTE_REWORK_REQUIRED",
+      ].includes(status)
+    ) {
+      return "INVESTIGATION_ONLY";
+    }
     return result?.requires_approval ? "INVESTIGATION_ONLY" : "FIX_PLAN";
   }, [result]);
   const investigationOnly = workflowMode === "INVESTIGATION_ONLY";
   const statusHelpText = useMemo(() => {
     if (!result) return "";
-    if (result.status === "QUEUED_OFFLINE") {
+    const status = String(result.status || "").toUpperCase();
+    if (status === "QUEUED_OFFLINE") {
       return "Saved on this phone. It will sync when connection returns.";
     }
+    if (status === "DIAGNOSTIC_IN_PROGRESS") {
+      return "Run the diagnostic checklist first, then generate quote and customer email.";
+    }
+    if (status === "PENDING_QUOTE_APPROVAL") {
+      return "Legacy status: quote is waiting for supervisor sign-off.";
+    }
+    if (status === "AWAITING_CUSTOMER_APPROVAL") {
+      return "Waiting for customer approval. Repair pool opens after customer approves.";
+    }
+    if (status === "REPAIR_POOL_OPEN") {
+      return "Customer approved. This ticket is now available in Repair Pool.";
+    }
+    if (status === "REPAIR_COMPLETED") {
+      return "Repair is completed. This ticket is archived in the supervisor ticket ledger.";
+    }
     if (result.requires_approval) {
-      return "Supervisor review is needed before any repair steps.";
+      return "Additional review is required before repair steps can continue.";
     }
     return "You can continue with the repair checklist below.";
   }, [result]);
+  const quotePackage = useMemo(() => result?.quote_package || null, [result]);
+  const quoteEmailDraft = useMemo(() => result?.quote_email_draft || null, [result]);
+  const quoteStage = useMemo(() => String(result?.quote_stage || "").toUpperCase(), [result]);
+  const canGenerateQuote = useMemo(() => {
+    if (!result) return false;
+    return ["DIAGNOSTIC_IN_PROGRESS", "QUOTE_REWORK_REQUIRED", "READY"].includes(String(result.status || "").toUpperCase());
+  }, [result]);
+  const canDraftQuoteEmail = useMemo(() => {
+    if (!result || !quotePackage) return false;
+    return ["DIAGNOSTIC_IN_PROGRESS", "QUOTE_REWORK_REQUIRED", "READY"].includes(String(result.status || "").toUpperCase());
+  }, [result, quotePackage]);
+  const canRecordCustomerDecision = useMemo(() => {
+    if (!result) return false;
+    return String(result.status || "").toUpperCase() === "AWAITING_CUSTOMER_APPROVAL";
+  }, [result]);
+  const canCompleteRepair = useMemo(() => {
+    if (!result) return false;
+    return ["REPAIR_POOL_OPEN", "REPAIR_IN_PROGRESS"].includes(
+      String(result.status || "").toUpperCase(),
+    );
+  }, [result]);
+  const canUsePartsNow = useMemo(() => {
+    const status = String(result?.status || workflowPartsStatus || "").toUpperCase();
+    const inRepair = ["REPAIR_POOL_OPEN", "REPAIR_IN_PROGRESS"].includes(status);
+    return inRepair && workflowPartsEnabled;
+  }, [result?.status, workflowPartsEnabled, workflowPartsStatus]);
+  const issueLevelAttachments = useMemo(() => {
+    const all = [];
+    for (const stepId of ISSUE_ATTACHMENT_STEP_FALLBACKS) {
+      all.push(...(attachmentsByStep[stepId] || []));
+    }
+    return all;
+  }, [attachmentsByStep]);
+  const customerInfo = useMemo(() => {
+    const payload = jobDetails?.job?.field_payload_json || {};
+    return {
+      name: String(payload.customer_name || result?.customer_info?.name || form.customer_name || "").trim(),
+      phone: String(payload.customer_phone || result?.customer_info?.phone || form.customer_phone || "").trim(),
+      email: String(payload.customer_email || result?.customer_info?.email || form.customer_email || "").trim(),
+    };
+  }, [jobDetails, result, form.customer_name, form.customer_phone, form.customer_email]);
   const maxAttachmentBytes = 3 * 1024 * 1024;
 
   function toAttachmentUrl(contentUrl) {
@@ -143,6 +425,45 @@ export default function TriageEngine() {
     if (!raw) return "";
     if (raw.startsWith("http://") || raw.startsWith("https://")) return raw;
     return `${getApiBaseUrl()}${raw}`;
+  }
+
+  async function loadWorkflowPartsForJob(jobId) {
+    if (!jobId) {
+      setWorkflowPartsByStep({});
+      setWorkflowPartsLocation("");
+      setWorkflowPartsEnabled(false);
+      setWorkflowPartsStatus("");
+      return;
+    }
+    setLoadingWorkflowParts(true);
+    try {
+      const data = await getWorkflowParts(jobId);
+      const map = {};
+      for (const item of data?.steps || []) {
+        map[String(item?.step_id || "")] = Array.isArray(item?.parts) ? item.parts : [];
+      }
+      setWorkflowPartsByStep(map);
+      setWorkflowPartsLocation(String(data?.location || ""));
+      setWorkflowPartsEnabled(Boolean(data?.parts_enabled));
+      setWorkflowPartsStatus(String(data?.status || ""));
+    } catch {
+      // Keep previous values during transient connectivity issues.
+    } finally {
+      setLoadingWorkflowParts(false);
+    }
+  }
+
+  async function loadPartsUsageForJob(jobId) {
+    if (!jobId) {
+      setPartsUsage([]);
+      return;
+    }
+    try {
+      const data = await getJobPartsUsage(jobId);
+      setPartsUsage(Array.isArray(data?.usage) ? data.usage : []);
+    } catch {
+      // Keep previous values during transient connectivity issues.
+    }
   }
 
   useEffect(() => {
@@ -156,6 +477,167 @@ export default function TriageEngine() {
     }
     loadScenarios();
   }, []);
+
+  async function loadSimilarIssuesForJob(jobId) {
+    if (!jobId) {
+      setSimilarIssues([]);
+      setSimilarPreviewExpandedJobId("");
+      setSimilarPreviewByJobId({});
+      return;
+    }
+    setLoadingSimilarIssues(true);
+    try {
+      const data = await getSimilarIssues(jobId, 5);
+      setSimilarIssues(data?.similar_issues || []);
+      setSimilarPreviewExpandedJobId("");
+      setSimilarPreviewByJobId({});
+    } catch {
+      setSimilarIssues([]);
+      setSimilarPreviewExpandedJobId("");
+      setSimilarPreviewByJobId({});
+    } finally {
+      setLoadingSimilarIssues(false);
+    }
+  }
+
+  async function handleResetHistorySeed() {
+    setHistorySeedBusy(true);
+    setError("");
+    setHistorySeedMessage("");
+    try {
+      const data = await resetDemoHistory({ clear_server: true });
+      const localCount = Number(data?.local_history_count || 0);
+      setHistorySeedMessage(
+        `History reset complete. Loaded ${localCount} example jobs.`,
+      );
+      setHistoryDemoSeeded(true);
+      await loadQuickQueues(false);
+      if (createdJobId) {
+        await loadSimilarIssuesForJob(createdJobId);
+      } else {
+        setSimilarIssues([]);
+      }
+    } catch (seedError) {
+      setError(seedError.message);
+    } finally {
+      setHistorySeedBusy(false);
+    }
+  }
+
+  async function loadQuickQueues(showSpinner = false) {
+    if (showSpinner) {
+      setLoadingCustomerQueue(true);
+      setLoadingOpenTickets(true);
+    }
+    try {
+      const [customerData, openData] = await Promise.all([
+        getCustomerApprovalQueue({ include_rework: true, limit: 6 }),
+        getRepairPool({ include_claimed: true, limit: 6 }),
+      ]);
+      setCustomerQueue(customerData?.jobs || []);
+      setOpenTickets(openData?.jobs || []);
+    } catch (queueError) {
+      if (showSpinner) {
+        setError(queueError.message);
+      }
+    } finally {
+      if (showSpinner) {
+        setLoadingCustomerQueue(false);
+        setLoadingOpenTickets(false);
+      }
+    }
+  }
+
+  useEffect(() => {
+    loadQuickQueues(true);
+    const interval = setInterval(() => {
+      loadQuickQueues(false);
+    }, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const snapshot = loadActiveJobSnapshot();
+    if (!snapshot?.result?.job_id) return;
+
+    setForm((prev) => ({ ...prev, ...(snapshot.form || {}) }));
+    setResult(snapshot.result || null);
+    setJobDetails(snapshot.jobDetails || null);
+    setWorkflowSteps(Array.isArray(snapshot.workflowSteps) ? snapshot.workflowSteps : []);
+    setWorkflowEvents(Array.isArray(snapshot.workflowEvents) ? snapshot.workflowEvents : []);
+    setTimeline(Array.isArray(snapshot.timeline) ? snapshot.timeline : []);
+    setSimilarIssues(Array.isArray(snapshot.similarIssues) ? snapshot.similarIssues : []);
+    setStepNotes(snapshot.stepNotes || {});
+    setStepMeasurements(snapshot.stepMeasurements || {});
+    setAttachmentsByStep(snapshot.attachmentsByStep || {});
+    setWorkflowPartsByStep(snapshot.workflowPartsByStep || {});
+    setWorkflowPartsLocation(String(snapshot.workflowPartsLocation || ""));
+    setWorkflowPartsEnabled(Boolean(snapshot.workflowPartsEnabled));
+    setWorkflowPartsStatus(String(snapshot.workflowPartsStatus || ""));
+    setPartsUsage(Array.isArray(snapshot.partsUsage) ? snapshot.partsUsage : []);
+    setPartQtyByKey(snapshot.partQtyByKey || {});
+    setQueueActionMessage(String(snapshot.queueActionMessage || ""));
+    setPartsActionMessage(String(snapshot.partsActionMessage || ""));
+    setWorkflowActionMessage(
+      String(
+        snapshot.workflowActionMessage ||
+          "Restored your active ticket from this device.",
+      ),
+    );
+    setActiveMenu(
+      snapshot.activeMenu && snapshot.activeMenu !== "capture"
+        ? snapshot.activeMenu
+        : "job",
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!result?.job_id) return;
+    saveActiveJobSnapshot({
+      ts: new Date().toISOString(),
+      form,
+      result,
+      jobDetails,
+      workflowSteps,
+      workflowEvents,
+      timeline,
+      similarIssues,
+      stepNotes,
+      stepMeasurements,
+      attachmentsByStep,
+      workflowPartsByStep,
+      workflowPartsLocation,
+      workflowPartsEnabled,
+      workflowPartsStatus,
+      partsUsage,
+      partQtyByKey,
+      queueActionMessage,
+      partsActionMessage,
+      workflowActionMessage,
+      activeMenu,
+    });
+  }, [
+    form,
+    result,
+    jobDetails,
+    workflowSteps,
+    workflowEvents,
+    timeline,
+    similarIssues,
+    stepNotes,
+    stepMeasurements,
+    attachmentsByStep,
+    workflowPartsByStep,
+    workflowPartsLocation,
+    workflowPartsEnabled,
+    workflowPartsStatus,
+    partsUsage,
+    partQtyByKey,
+    queueActionMessage,
+    partsActionMessage,
+    workflowActionMessage,
+    activeMenu,
+  ]);
 
   useEffect(() => {
     let disposed = false;
@@ -337,9 +819,19 @@ export default function TriageEngine() {
     event.preventDefault();
     setLoading(true);
     setError("");
+    setPartsActionMessage("");
+    setWorkflowActionMessage("");
     setJobDetails(null);
     setTimeline([]);
     setAttachmentsByStep({});
+    setSimilarIssues([]);
+    setWorkflowPartsByStep({});
+    setWorkflowPartsLocation("");
+    setWorkflowPartsEnabled(false);
+    setWorkflowPartsStatus("");
+    setPartsUsage([]);
+    setPartQtyByKey({});
+    setHistorySeedMessage("");
     try {
       const data = await submitJob(form);
       if (data?.queued_offline && data?.local_only) {
@@ -347,13 +839,24 @@ export default function TriageEngine() {
         setWorkflowSteps(data.initial_workflow || []);
         setWorkflowEvents([]);
         setAttachmentsByStep({});
+        setWorkflowPartsByStep({});
+        setWorkflowPartsLocation("");
+        setWorkflowPartsEnabled(false);
+        setWorkflowPartsStatus("");
+        setPartsUsage([]);
+        setActiveMenu("job");
+        await uploadPendingIssuePhotos(
+          data.job_id || "",
+          data.initial_workflow || [],
+        );
+        setSimilarIssues([]);
         return;
       }
       if (data?.queued_offline) {
         setResult({
           job_id: data.job_id || "queued-offline",
           status: data.status || "QUEUED_OFFLINE",
-          requires_approval: true,
+          requires_approval: false,
           workflow_mode: "INVESTIGATION_ONLY",
           workflow_intent:
             "Submission queued locally. Collect details while waiting for replay.",
@@ -361,7 +864,7 @@ export default function TriageEngine() {
             "capture_observation",
             "capture_measurement",
             "attach_evidence",
-            "request_supervisor_review",
+            "prepare_quote",
           ],
           suppressed_guidance: true,
           escalation_reasons: ["queued_offline_client"],
@@ -402,12 +905,35 @@ export default function TriageEngine() {
         setWorkflowSteps([]);
         setWorkflowEvents([]);
         setAttachmentsByStep({});
+        setWorkflowPartsByStep({});
+        setWorkflowPartsLocation("");
+        setWorkflowPartsEnabled(false);
+        setWorkflowPartsStatus("");
+        setPartsUsage([]);
+        setSimilarIssues([]);
+        setActiveMenu("job");
+        await uploadPendingIssuePhotos(data.job_id || "", []);
         return;
       }
       setResult(data);
       setWorkflowSteps(data.initial_workflow || []);
       setWorkflowEvents([]);
       setAttachmentsByStep({});
+      setSimilarIssues(
+        Array.isArray(data?.similar_issue_matches)
+          ? data.similar_issue_matches
+          : [],
+      );
+      setActiveMenu("job");
+      await uploadPendingIssuePhotos(
+        data.job_id || "",
+        data.initial_workflow || [],
+      );
+      await loadWorkflowPartsForJob(data.job_id || "");
+      await loadPartsUsageForJob(data.job_id || "");
+      if (!Array.isArray(data?.similar_issue_matches)) {
+        await loadSimilarIssuesForJob(data.job_id || "");
+      }
     } catch (submitError) {
       setError(submitError.message);
     } finally {
@@ -415,18 +941,19 @@ export default function TriageEngine() {
     }
   }
 
-  async function handleLoadJobDetails() {
-    if (!createdJobId) return;
+  async function loadJobDetailsById(jobId) {
+    if (!jobId) return;
     setLoadingDetails(true);
     setError("");
+    setPartsActionMessage("");
     try {
-      const data = await getJobDetails(createdJobId);
+      const data = await getJobDetails(jobId);
       setJobDetails(data);
       if (data?.job?.final_response_json) {
         setResult((prev) => ({
           ...(prev || {}),
           ...data.job.final_response_json,
-          job_id: data.job.job_id || createdJobId,
+          job_id: data.job.job_id || jobId,
           status: data.job.status,
           requires_approval: Boolean(data.job.requires_approval),
         }));
@@ -434,7 +961,13 @@ export default function TriageEngine() {
       setWorkflowSteps(data.workflow_steps || []);
       setWorkflowEvents(data.workflow_events || []);
       setAttachmentsByStep(toGroupedAttachments(data.attachments || []));
-      await loadTimeline(createdJobId);
+      setActiveMenu("job");
+      await Promise.all([
+        loadTimeline(jobId),
+        loadSimilarIssuesForJob(jobId),
+        loadWorkflowPartsForJob(jobId),
+        loadPartsUsageForJob(jobId),
+      ]);
     } catch (detailsError) {
       setError(detailsError.message);
     } finally {
@@ -442,20 +975,340 @@ export default function TriageEngine() {
     }
   }
 
+  async function handlePreviewSimilarJob(jobId) {
+    if (!jobId) return;
+    if (similarPreviewExpandedJobId === jobId) {
+      setSimilarPreviewExpandedJobId("");
+      return;
+    }
+    setSimilarPreviewExpandedJobId(jobId);
+    const cached = similarPreviewByJobId[jobId];
+    if (cached) return;
+
+    setSimilarPreviewLoadingJobId(jobId);
+    try {
+      const detail = await getJobDetails(jobId);
+      setSimilarPreviewByJobId((prev) => ({
+        ...prev,
+        [jobId]: detail,
+      }));
+    } catch (previewError) {
+      setError(previewError.message);
+      setSimilarPreviewExpandedJobId("");
+    } finally {
+      setSimilarPreviewLoadingJobId("");
+    }
+  }
+
+  async function handleLoadJobDetails() {
+    await loadJobDetailsById(createdJobId);
+  }
+
+  async function handleGenerateQuote() {
+    if (!createdJobId) return;
+    setQuoteBusy(true);
+    setError("");
+    try {
+      const data = await generateQuote(createdJobId);
+      setResult((prev) => ({
+        ...(prev || {}),
+        status: data.status || prev?.status,
+        quote_package: data.quote_package || prev?.quote_package,
+        quote_stage: data.quote_stage || prev?.quote_stage,
+      }));
+      await handleLoadJobDetails();
+    } catch (quoteError) {
+      setError(quoteError.message);
+    } finally {
+      setQuoteBusy(false);
+    }
+  }
+
+  async function handleDraftQuoteEmail() {
+    if (!createdJobId) return;
+    setEmailBusy(true);
+    setError("");
+    try {
+      const data = await draftQuoteEmail(createdJobId, {
+        recipient_name: quoteRecipientName,
+        recipient_email: quoteRecipientEmail,
+      });
+      setResult((prev) => ({
+        ...(prev || {}),
+        status: data.status || prev?.status,
+        quote_stage: data.quote_stage || prev?.quote_stage,
+        quote_email_draft: data.quote_email_draft || prev?.quote_email_draft,
+      }));
+      await handleLoadJobDetails();
+    } catch (emailError) {
+      setError(emailError.message);
+    } finally {
+      setEmailBusy(false);
+    }
+  }
+
+  async function handleCustomerDecision(decision) {
+    if (!createdJobId) return;
+    setCustomerBusy(true);
+    setError("");
+    try {
+      await recordCustomerApproval(createdJobId, {
+        decision,
+        actor_id: "field_technician",
+        notes: decision === "approve" ? "Customer approved quote." : "Customer declined quote.",
+      });
+      await handleLoadJobDetails();
+      await loadQuickQueues(false);
+    } catch (decisionError) {
+      setError(decisionError.message);
+    } finally {
+      setCustomerBusy(false);
+    }
+  }
+
+  async function handleQueueCustomerDecision(jobId, decision) {
+    setCustomerQueueBusyJobId(jobId);
+    setQueueActionMessage("");
+    setError("");
+    try {
+      const updated = await recordCustomerApproval(jobId, {
+        decision,
+        actor_id: "field_technician",
+        notes:
+          decision === "approve"
+            ? "Customer approved from technician queue."
+            : "Customer declined from technician queue.",
+      });
+      setQueueActionMessage(`Updated ${jobId} -> ${updated.status}`);
+      await loadQuickQueues(false);
+      await loadJobDetailsById(jobId);
+    } catch (queueDecisionError) {
+      setError(queueDecisionError.message);
+    } finally {
+      setCustomerQueueBusyJobId("");
+    }
+  }
+
+  async function handleClaimOpenTicket(jobId) {
+    setOpenTicketBusyJobId(jobId);
+    setQueueActionMessage("");
+    setError("");
+    try {
+      const updated = await claimRepairJob(jobId, {
+        technician_id: "field_technician",
+        technician_name: "Field Technician",
+      });
+      setQueueActionMessage(`Claimed ${jobId} -> ${updated.status}`);
+      await loadQuickQueues(false);
+      await loadJobDetailsById(jobId);
+    } catch (claimError) {
+      setError(claimError.message);
+    } finally {
+      setOpenTicketBusyJobId("");
+    }
+  }
+
+  async function handleCompleteRepair() {
+    if (!createdJobId) return;
+    setCompleteBusy(true);
+    setQueueActionMessage("");
+    setError("");
+    try {
+      const response = await completeRepairJob(createdJobId, {
+        technician_id: "field_technician",
+        notes: String(completionNotes || "").trim(),
+      });
+      if (response?.queued_offline) {
+        setQueueActionMessage("Completion queued offline. It will sync when connection returns.");
+      } else {
+        setQueueActionMessage(`Marked ${createdJobId} as REPAIR_COMPLETED.`);
+        setCompletionNotes("");
+      }
+      await handleLoadJobDetails();
+      await loadQuickQueues(false);
+    } catch (completeError) {
+      setError(completeError.message);
+    } finally {
+      setCompleteBusy(false);
+    }
+  }
+
   function updateField(field, value) {
     setForm((prev) => ({ ...prev, [field]: value }));
   }
 
-  function loadScenarioById(scenarioId) {
+  function resolveIssueAttachmentStepId(candidateSteps = []) {
+    const stepIds = new Set(
+      (candidateSteps || []).map((step) => String(step?.step_id || "")),
+    );
+    if (stepIds.has(ISSUE_ATTACHMENT_STEP_ID)) {
+      return ISSUE_ATTACHMENT_STEP_ID;
+    }
+    if (stepIds.has("offline-context-observation")) {
+      return "offline-context-observation";
+    }
+    const firstStepId = String(candidateSteps?.[0]?.step_id || "").trim();
+    return firstStepId || ISSUE_ATTACHMENT_STEP_ID;
+  }
+
+  function clearPendingIssuePhotos(photoIds = []) {
+    const idSet = new Set(photoIds);
+    setPendingIssuePhotos((prev) => {
+      const next = [];
+      for (const item of prev) {
+        if (!idSet.has(item.id)) {
+          next.push(item);
+          continue;
+        }
+        if (item.preview_url && typeof URL !== "undefined") {
+          URL.revokeObjectURL(item.preview_url);
+        }
+      }
+      return next;
+    });
+  }
+
+  function handleIssuePhotoSelection(source, event) {
+    const files = Array.from(event?.target?.files || []);
+    event.target.value = "";
+    if (files.length === 0) return;
+    setError("");
+
+    const nextItems = [];
+    const rejected = [];
+    for (const file of files) {
+      const mimeType = String(file?.type || "").toLowerCase();
+      if (!mimeType.startsWith("image/")) {
+        rejected.push(`${file.name || "unknown file"} is not an image`);
+        continue;
+      }
+      if (file.size > maxAttachmentBytes) {
+        rejected.push(
+          `${file.name || "image"} is larger than ${maxAttachmentBytes / (1024 * 1024)}MB`,
+        );
+        continue;
+      }
+      nextItems.push({
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        source,
+        file,
+        filename: file.name || `issue-photo-${Date.now()}.jpg`,
+        mime_type: mimeType || "image/jpeg",
+        caption: String(issuePhotoCaption || "").trim(),
+        captured_ts: new Date().toISOString(),
+        preview_url:
+          typeof URL !== "undefined" ? URL.createObjectURL(file) : "",
+      });
+    }
+
+    if (rejected.length > 0) {
+      setError(`Some files were skipped: ${rejected.join("; ")}`);
+    }
+    if (nextItems.length > 0) {
+      setPendingIssuePhotos((prev) => [...prev, ...nextItems]);
+      setIssuePhotoCaption("");
+    }
+  }
+
+  function removePendingIssuePhoto(photoId) {
+    clearPendingIssuePhotos([photoId]);
+  }
+
+  async function uploadPendingIssuePhotos(jobId, candidateSteps = []) {
+    if (!jobId || pendingIssuePhotos.length === 0) return;
+    const stepId = resolveIssueAttachmentStepId(candidateSteps);
+    const photosToUpload = [...pendingIssuePhotos];
+    const uploadedIds = [];
+    setUploadingIssuePhotos(true);
+    setError("");
+    try {
+      for (const item of photosToUpload) {
+        const payload = {
+          step_id: stepId,
+          source: item.source,
+          filename: item.filename,
+          mime_type: item.mime_type,
+          image_base64: await fileToBase64(item.file),
+          caption: item.caption || "",
+          captured_ts: item.captured_ts || new Date().toISOString(),
+        };
+        const response = await uploadJobAttachment(jobId, payload);
+        const responseStepId =
+          String(response?.step_id || response?.attachment?.step_id || stepId);
+        if (response?.queued_offline) {
+          setAttachmentsByStep((prev) => {
+            const next = { ...prev };
+            const queuedItem = {
+              attachment_id: `queued-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+              step_id: responseStepId,
+              filename: payload.filename,
+              mime_type: payload.mime_type,
+              caption: payload.caption,
+              content_url: "",
+              sync_state: "queued_offline",
+              created_ts: new Date().toISOString(),
+            };
+            next[responseStepId] = [queuedItem, ...(next[responseStepId] || [])];
+            return next;
+          });
+          uploadedIds.push(item.id);
+          continue;
+        }
+        if (response?.attachment) {
+          setAttachmentsByStep((prev) => {
+            const next = { ...prev };
+            next[responseStepId] = [
+              response.attachment,
+              ...(next[responseStepId] || []),
+            ];
+            return next;
+          });
+          uploadedIds.push(item.id);
+          continue;
+        }
+        await loadAttachments(jobId);
+        uploadedIds.push(item.id);
+      }
+      await loadTimeline(jobId);
+    } catch (uploadError) {
+      setError(uploadError.message);
+    } finally {
+      if (uploadedIds.length > 0) {
+        clearPendingIssuePhotos(uploadedIds);
+      }
+      setUploadingIssuePhotos(false);
+    }
+  }
+
+  async function loadScenarioById(scenarioId) {
     setSelectedScenario(scenarioId);
     const selected = scenarioCatalog.find((item) => item.id === scenarioId);
     if (!selected?.payload) return;
+    if (selected.id?.startsWith("history_") && !historyDemoSeeded) {
+      try {
+        setHistorySeedBusy(true);
+        const seeded = await resetDemoHistory({ clear_server: true });
+        const localCount = Number(seeded?.local_history_count || 0);
+        setHistorySeedMessage(
+          `History seeded for demo (${localCount} example jobs).`,
+        );
+        setHistoryDemoSeeded(true);
+        setSimilarIssues([]);
+      } catch {
+        // Keep scenario loading even if seed call fails.
+      } finally {
+        setHistorySeedBusy(false);
+      }
+    }
     setForm({
       issue_text:
         selected.payload.issue_text ||
         [selected.payload.symptoms || "", selected.payload.notes || ""]
           .filter(Boolean)
           .join(". "),
+      customer_name: selected.payload.customer_name || "",
+      customer_phone: selected.payload.customer_phone || "",
+      customer_email: selected.payload.customer_email || "",
       equipment_id: selected.payload.equipment_id || "",
       fault_code: selected.payload.fault_code || "",
       location: selected.payload.location || "",
@@ -574,7 +1427,12 @@ export default function TriageEngine() {
             }
           : prev,
       );
-      await loadAttachments(createdJobId);
+      await Promise.all([
+        loadAttachments(createdJobId),
+        loadSimilarIssuesForJob(createdJobId),
+        loadWorkflowPartsForJob(createdJobId),
+        loadPartsUsageForJob(createdJobId),
+      ]);
     } catch (workflowError) {
       setError(workflowError.message);
     } finally {
@@ -586,15 +1444,50 @@ export default function TriageEngine() {
     if (!createdJobId) return;
     setUpdatingStepId(stepId);
     setError("");
+    setWorkflowActionMessage("");
     try {
+      const stepNotesText = stepNotes[stepId] || "";
+      const stepMeasurementValue = stepMeasurements[stepId] || "";
       const data = await updateWorkflowStep(createdJobId, {
         step_id: stepId,
         status,
-        measurement_json: { value: stepMeasurements[stepId] || "" },
-        notes: stepNotes[stepId] || "",
+        measurement_json: { value: stepMeasurementValue },
+        notes: stepNotesText,
         actor_id: "field_technician",
-        request_supervisor_review: Boolean(stepManualEscalation[stepId]),
+        request_supervisor_review: false,
       });
+      if (data?.queued_offline) {
+        const queuedTs = new Date().toISOString();
+        setWorkflowSteps((prev) =>
+          (prev || []).map((step) =>
+            String(step?.step_id || "") === String(stepId)
+              ? {
+                  ...step,
+                  status,
+                  updated_ts: queuedTs,
+                  sync_state: "queued_offline",
+                }
+              : step,
+          ),
+        );
+        setWorkflowEvents((prev) => [
+          {
+            event_id: `queued-step-${Date.now()}`,
+            ts: queuedTs,
+            step_id: stepId,
+            status,
+            actor_id: "field_technician",
+            notes: stepNotesText,
+            measurement_json: { value: stepMeasurementValue },
+            sync_state: "queued_offline",
+          },
+          ...(prev || []),
+        ]);
+        setWorkflowActionMessage(
+          "Step saved offline on this phone. It will sync automatically when connection returns.",
+        );
+        return;
+      }
       setWorkflowSteps(data.workflow_steps || []);
       setResult((prev) =>
         prev
@@ -619,6 +1512,7 @@ export default function TriageEngine() {
             }
           : prev,
       );
+      setWorkflowActionMessage("");
       await loadAttachments(createdJobId);
       await refreshWorkflow();
       await loadTimeline(createdJobId);
@@ -663,11 +1557,62 @@ export default function TriageEngine() {
           : prev,
       );
       await refreshWorkflow();
-      await loadTimeline(createdJobId);
+      await Promise.all([
+        loadTimeline(createdJobId),
+        loadWorkflowPartsForJob(createdJobId),
+        loadPartsUsageForJob(createdJobId),
+      ]);
     } catch (replanError) {
       setError(replanError.message);
     } finally {
       setReplanning(false);
+    }
+  }
+
+  function partUsageKey(stepId, partId) {
+    return `${String(stepId || "")}::${String(partId || "")}`;
+  }
+
+  async function handleUsePart(stepId, part) {
+    if (!canUsePartsNow || !createdJobId || !stepId || !part?.part_id) return;
+    const key = partUsageKey(stepId, part.part_id);
+    const qtyRaw = String(partQtyByKey[key] || "1").trim();
+    const quantityUsed = Math.max(1, Number.parseInt(qtyRaw, 10) || 1);
+    setUsingPartKey(key);
+    setError("");
+    setPartsActionMessage("");
+    try {
+      const response = await usePartForStep({
+        job_id: createdJobId,
+        step_id: stepId,
+        part_id: part.part_id,
+        quantity_used: quantityUsed,
+        actor_id: "field_technician",
+        actor_role: "technician",
+        notes: stepNotes[stepId] || null,
+      });
+      if (response?.queued_offline) {
+        setPartsActionMessage("Part usage queued offline. It will sync when connectivity returns.");
+      } else if (response?.ok === false && response?.blocked_out_of_stock) {
+        const requestId = response?.restock_request?.request_id;
+        setPartsActionMessage(
+          `Out of stock for ${part.part_name}. Restock request created${requestId ? ` (${requestId})` : ""}.`,
+        );
+      } else {
+        const remaining = Number(response?.inventory?.quantity_on_hand ?? part.quantity_on_hand ?? 0);
+        setPartsActionMessage(
+          `Recorded ${quantityUsed} x ${part.part_name}. Remaining at ${part.location}: ${remaining}.`,
+        );
+      }
+      await Promise.all([
+        loadWorkflowPartsForJob(createdJobId),
+        loadPartsUsageForJob(createdJobId),
+        loadTimeline(createdJobId),
+      ]);
+    } catch (useError) {
+      setError(useError.message);
+    } finally {
+      setUsingPartKey("");
     }
   }
 
@@ -695,10 +1640,38 @@ export default function TriageEngine() {
   }
   return (
     <div className="space-y-6">
-      <form
-        onSubmit={handleSubmit}
-        className="relative w-full max-w-md mx-auto space-y-4 pb-[calc(2rem+env(safe-area-inset-bottom))]"
-      >
+      <section className="bg-slate-900 border border-slate-800 p-3 rounded-xl">
+        <div className="text-xs uppercase tracking-wide text-slate-500 mb-2">
+          Technician Menu
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          {[
+            { id: "capture", label: "New Issue" },
+            { id: "job", label: "Active Job" },
+            { id: "customer", label: "Customer Queue" },
+            { id: "tickets", label: "Open Tickets" },
+          ].map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setActiveMenu(item.id)}
+              className={`px-3 py-2 rounded text-xs font-semibold border ${
+                activeMenu === item.id
+                  ? "bg-cummins-red/20 border-cummins-red text-white"
+                  : "bg-black/20 border-slate-700 text-slate-300 hover:border-slate-500"
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {activeMenu === "capture" && (
+        <form
+          onSubmit={handleSubmit}
+          className="relative w-full max-w-md mx-auto space-y-4 pb-[calc(2rem+env(safe-area-inset-bottom))]"
+        >
         <div className="rounded-2xl border border-white/10 bg-gradient-to-b from-white/5 to-white/0 p-4 shadow-[0_12px_30px_rgba(0,0,0,0.35)]">
           <h1 className="text-lg font-bold tracking-tight">
             STEP 1: TELL US WHAT HAPPENED
@@ -754,12 +1727,141 @@ export default function TriageEngine() {
             )}
           </div>
 
+          <div className="mt-5 border-t border-white/10 pt-4 space-y-3">
+            <div className="text-sm font-medium text-slate-200">
+              Issue photos <span className="text-slate-400">(optional)</span>
+            </div>
+            <div className="text-xs text-slate-400">
+              Add photos with the original issue. They upload right after the
+              job is created.
+            </div>
+            <input
+              value={issuePhotoCaption}
+              onChange={(event) => setIssuePhotoCaption(event.target.value)}
+              placeholder="Photo caption (optional)"
+              className="w-full h-11 rounded-xl bg-white/5 border border-white/10 px-3 text-[15px] text-slate-100 focus:outline-none focus:border-white/20 focus:ring-4 focus:ring-white/10"
+            />
+            <div className="flex flex-wrap gap-2 items-center">
+              <label className="bg-sky-700 hover:bg-sky-600 px-3 py-2 rounded text-xs font-semibold cursor-pointer">
+                Take Photo
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  multiple
+                  className="hidden"
+                  disabled={loading || uploadingIssuePhotos}
+                  onChange={(event) =>
+                    handleIssuePhotoSelection("camera", event)
+                  }
+                />
+              </label>
+              <label className="bg-indigo-700 hover:bg-indigo-600 px-3 py-2 rounded text-xs font-semibold cursor-pointer">
+                Upload Image
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  disabled={loading || uploadingIssuePhotos}
+                  onChange={(event) =>
+                    handleIssuePhotoSelection("gallery", event)
+                  }
+                />
+              </label>
+              {uploadingIssuePhotos && (
+                <span className="text-xs text-slate-400">
+                  Uploading issue photos...
+                </span>
+              )}
+            </div>
+
+            {pendingIssuePhotos.length > 0 && (
+              <div className="grid grid-cols-2 gap-2">
+                {pendingIssuePhotos.map((item) => (
+                  <div
+                    key={item.id}
+                    className="bg-black/40 border border-slate-800 rounded p-2 text-xs space-y-1"
+                  >
+                    {item.preview_url ? (
+                      <img
+                        src={item.preview_url}
+                        alt={item.caption || item.filename || "Issue photo"}
+                        className="w-full h-24 object-cover rounded border border-slate-700"
+                      />
+                    ) : (
+                      <div className="w-full h-24 rounded border border-slate-700 bg-slate-900 flex items-center justify-center text-slate-500">
+                        image
+                      </div>
+                    )}
+                    <div className="truncate text-slate-300">
+                      {item.filename}
+                    </div>
+                    <div className="truncate text-slate-500">
+                      {item.caption || "No caption"}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => removePendingIssuePhoto(item.id)}
+                      className="text-red-300 hover:text-red-200 text-[11px] underline"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="mt-5 border-t border-white/10 pt-4">
             <div className="text-sm font-medium text-slate-200">
-              Add IDs / location <span className="text-slate-400">(optional)</span>
+              Customer + IDs / location{" "}
+              <span className="text-slate-400">(optional)</span>
             </div>
 
             <div className="mt-4 space-y-3">
+              <div>
+                <div className="mb-1 text-xs font-medium text-slate-400">
+                  Customer name (optional)
+                </div>
+                <input
+                  value={form.customer_name}
+                  onChange={(event) =>
+                    updateField("customer_name", event.target.value)
+                  }
+                  className="w-full h-11 rounded-xl bg-white/5 border border-white/10 px-3 text-[15px] text-slate-100 focus:outline-none focus:border-white/20 focus:ring-4 focus:ring-white/10"
+                  placeholder="Alex Johnson"
+                />
+              </div>
+
+              <div>
+                <div className="mb-1 text-xs font-medium text-slate-400">
+                  Customer phone (optional)
+                </div>
+                <input
+                  value={form.customer_phone}
+                  onChange={(event) =>
+                    updateField("customer_phone", event.target.value)
+                  }
+                  className="w-full h-11 rounded-xl bg-white/5 border border-white/10 px-3 text-[15px] text-slate-100 focus:outline-none focus:border-white/20 focus:ring-4 focus:ring-white/10"
+                  placeholder="(555) 123-4567"
+                />
+              </div>
+
+              <div>
+                <div className="mb-1 text-xs font-medium text-slate-400">
+                  Customer email (optional)
+                </div>
+                <input
+                  value={form.customer_email}
+                  onChange={(event) =>
+                    updateField("customer_email", event.target.value)
+                  }
+                  className="w-full h-11 rounded-xl bg-white/5 border border-white/10 px-3 text-[15px] text-slate-100 focus:outline-none focus:border-white/20 focus:ring-4 focus:ring-white/10"
+                  placeholder="customer@example.com"
+                />
+              </div>
+
               <div>
                 <div className="mb-1 text-xs font-medium text-slate-400">
                   Equipment ID (optional)
@@ -803,20 +1905,9 @@ export default function TriageEngine() {
               </div>
             </div>
 
-            <label className="mt-4 flex items-center gap-2 text-sm text-slate-200">
-              <input
-                type="checkbox"
-                checked={form.request_supervisor_review}
-                onChange={(event) =>
-                  updateField(
-                    "request_supervisor_review",
-                    event.target.checked,
-                  )
-                }
-                className="h-4 w-4 rounded border-white/20 bg-white/5"
-              />
-              <span>Request supervisor review</span>
-            </label>
+            <div className="mt-4 text-xs text-slate-400">
+              {"Diagnostic -> Quote -> Customer approval flow is active. Supervisor routing is disabled in this track."}
+            </div>
           </div>
         </div>
 
@@ -849,6 +1940,19 @@ export default function TriageEngine() {
               Quick Load Safety Scenario
             </button>
           </div>
+          <div className="pt-2 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleResetHistorySeed}
+              disabled={historySeedBusy}
+              className="border border-emerald-700 text-emerald-300 hover:bg-emerald-950/30 px-3 py-2 rounded text-xs font-semibold disabled:opacity-50"
+            >
+              {historySeedBusy ? "Resetting history..." : "Reset + Seed History Examples"}
+            </button>
+            {historySeedMessage && (
+              <span className="text-xs text-emerald-300">{historySeedMessage}</span>
+            )}
+          </div>
         </details>
 
         <div ref={submitCtaRef} className="fixed left-4 right-4 bottom-[calc(72px+env(safe-area-inset-bottom))] max-w-md mx-auto">
@@ -860,7 +1964,8 @@ export default function TriageEngine() {
             {loading ? "Building your checklist..." : "Get My Checklist"}
           </button>
         </div>
-      </form>
+        </form>
+      )}
 
       {error && (
         <div className="bg-red-900/20 border border-red-500/50 text-red-300 p-3 rounded">
@@ -868,7 +1973,168 @@ export default function TriageEngine() {
         </div>
       )}
 
-      {result && (
+      {(activeMenu === "customer" || activeMenu === "tickets") && (
+        <section className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="font-bold text-base">
+              {activeMenu === "customer" ? "Customer Queue" : "Open Tickets"}
+            </h3>
+            <p className="text-xs text-slate-500">
+              {activeMenu === "customer"
+                ? "Approve or decline customer quotes."
+                : "Claim tickets that are ready for repair."}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => loadQuickQueues(true)}
+            className="border border-slate-700 hover:border-slate-500 px-3 py-1.5 rounded text-xs"
+          >
+            {loadingCustomerQueue || loadingOpenTickets ? "Refreshing..." : "Refresh"}
+          </button>
+        </div>
+
+        {queueActionMessage && (
+          <div className="bg-green-900/20 border border-green-600/50 text-green-200 p-2 rounded text-xs">
+            {queueActionMessage}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 gap-3">
+          {activeMenu === "customer" && (
+            <div className="bg-black/30 border border-slate-800 rounded p-3 space-y-2">
+            <div className="text-xs uppercase tracking-wide text-slate-400">
+              Customer Approval Queue ({customerQueue.length})
+            </div>
+            {customerQueue.length === 0 ? (
+              <div className="text-xs text-slate-500">
+                No jobs waiting on customer approval.
+              </div>
+            ) : (
+              customerQueue.map((job) => (
+                <div
+                  key={`cust-${job.job_id}`}
+                  className="border border-slate-800 rounded p-2 space-y-1"
+                >
+                  <div className="text-[11px] font-mono text-slate-400">{job.job_id}</div>
+                  <div className="text-xs text-slate-300">
+                    {job.equipment_id || "N/A"} | {job.fault_code || "N/A"}
+                  </div>
+                  <div className="text-xs text-slate-400">
+                    Quote:{" "}
+                    {job.quote_total_usd
+                      ? `$${Number(job.quote_total_usd).toFixed(2)}`
+                      : "N/A"}
+                  </div>
+                  <div className="text-xs text-slate-400">
+                    Customer: {job.customer_name || job.customer_email || "N/A"}
+                  </div>
+                  <div className="flex gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handleQueueCustomerDecision(job.job_id, "approve")}
+                      disabled={customerQueueBusyJobId === job.job_id}
+                      className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 px-2 py-1 rounded text-[11px] font-semibold"
+                    >
+                      Approved
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleQueueCustomerDecision(job.job_id, "deny")}
+                      disabled={customerQueueBusyJobId === job.job_id}
+                      className="bg-red-700 hover:bg-red-600 disabled:opacity-50 px-2 py-1 rounded text-[11px] font-semibold"
+                    >
+                      Declined
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+            </div>
+          )}
+
+          {activeMenu === "tickets" && (
+            <div className="bg-black/30 border border-slate-800 rounded p-3 space-y-2">
+            <div className="text-xs uppercase tracking-wide text-slate-400">
+              Open Tickets Queue ({openTickets.length})
+            </div>
+            {openTickets.length === 0 ? (
+              <div className="text-xs text-slate-500">
+                No tickets in repair pool yet.
+              </div>
+            ) : (
+              openTickets.map((job) => (
+                <div
+                  key={`open-${job.job_id}`}
+                  className="border border-slate-800 rounded p-2 space-y-1"
+                >
+                  <div className="text-[11px] font-mono text-slate-400">{job.job_id}</div>
+                  <div className="text-xs text-slate-300">
+                    {job.equipment_id || "N/A"} | {job.fault_code || "N/A"}
+                  </div>
+                  <div className="text-xs text-slate-400">
+                    Status: {job.status || "N/A"}
+                  </div>
+                  <div className="flex gap-1.5">
+                    {job.status === "REPAIR_POOL_OPEN" ? (
+                      <button
+                        type="button"
+                        onClick={() => handleClaimOpenTicket(job.job_id)}
+                        disabled={openTicketBusyJobId === job.job_id}
+                        className="bg-indigo-700 hover:bg-indigo-600 disabled:opacity-50 px-2 py-1 rounded text-[11px] font-semibold"
+                      >
+                        Claim Ticket
+                      </button>
+                    ) : (
+                      <div className="text-[11px] text-slate-500 self-center">
+                        Already claimed
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => loadJobDetailsById(job.job_id)}
+                      disabled={loadingDetails}
+                      className="border border-slate-700 hover:border-slate-500 disabled:opacity-50 px-2 py-1 rounded text-[11px] font-semibold"
+                    >
+                      Open Checklist
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+            </div>
+          )}
+        </div>
+        </section>
+      )}
+
+      {activeMenu === "job" && !result && (
+        <section className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-3">
+          <h3 className="font-bold text-lg">No Active Job Loaded</h3>
+          <p className="text-sm text-slate-400">
+            Start from New Issue, or open a ticket from Open Tickets.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setActiveMenu("capture")}
+              className="bg-cummins-red/20 border border-cummins-red text-white px-3 py-2 rounded text-xs font-semibold"
+            >
+              Go to New Issue
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveMenu("tickets")}
+              className="border border-slate-700 hover:border-slate-500 px-3 py-2 rounded text-xs font-semibold"
+            >
+              View Open Tickets
+            </button>
+          </div>
+        </section>
+      )}
+
+      {activeMenu === "job" && result && (
         <section className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-3">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
             <h3 className="font-bold text-lg">Your Service Plan</h3>
@@ -881,33 +2147,214 @@ export default function TriageEngine() {
             {statusHelpText}
           </div>
 
+          {(customerInfo.name || customerInfo.phone || customerInfo.email) && (
+            <div className="bg-black/30 border border-slate-800 rounded p-3 space-y-2">
+              <div className="text-xs uppercase tracking-wide text-slate-400">
+                Customer Info
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm text-slate-200">
+                <div>
+                  <div className="text-[11px] text-slate-500 uppercase">Name</div>
+                  <div>{customerInfo.name || "N/A"}</div>
+                </div>
+                <div>
+                  <div className="text-[11px] text-slate-500 uppercase">Phone</div>
+                  <div>{customerInfo.phone || "N/A"}</div>
+                </div>
+                <div>
+                  <div className="text-[11px] text-slate-500 uppercase">Email</div>
+                  <div>{customerInfo.email || "N/A"}</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {(issueLevelAttachments.length > 0 || pendingIssuePhotos.length > 0) && (
+            <div className="bg-black/30 border border-slate-800 rounded p-3 space-y-2">
+              <div className="text-xs uppercase tracking-wide text-slate-400">
+                Issue Photos
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                {issueLevelAttachments.map((item) => (
+                  <div
+                    key={`${item.attachment_id}-${item.created_ts || ""}`}
+                    className="bg-black/40 border border-slate-800 rounded p-2 text-xs space-y-1"
+                  >
+                    {item.content_url ? (
+                      <a
+                        href={toAttachmentUrl(item.content_url)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="block"
+                      >
+                        <img
+                          src={toAttachmentUrl(item.content_url)}
+                          alt={item.caption || item.filename || "Issue photo"}
+                          className="w-full h-24 object-cover rounded border border-slate-700"
+                        />
+                      </a>
+                    ) : (
+                      <div className="w-full h-24 rounded border border-slate-700 bg-slate-900 flex items-center justify-center text-slate-500">
+                        queued
+                      </div>
+                    )}
+                    <div className="truncate text-slate-300">
+                      {item.filename || "attachment"}
+                    </div>
+                    <div className="truncate text-slate-500">
+                      {item.caption || "No caption"}
+                    </div>
+                  </div>
+                ))}
+                {pendingIssuePhotos.map((item) => (
+                  <div
+                    key={`pending-${item.id}`}
+                    className="bg-black/40 border border-dashed border-slate-700 rounded p-2 text-xs space-y-1"
+                  >
+                    {item.preview_url ? (
+                      <img
+                        src={item.preview_url}
+                        alt={item.caption || item.filename || "Pending issue photo"}
+                        className="w-full h-24 object-cover rounded border border-slate-700"
+                      />
+                    ) : (
+                      <div className="w-full h-24 rounded border border-slate-700 bg-slate-900 flex items-center justify-center text-slate-500">
+                        pending
+                      </div>
+                    )}
+                    <div className="truncate text-slate-300">
+                      {item.filename}
+                    </div>
+                    <div className="truncate text-slate-500">
+                      {item.caption || "No caption"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <pre className="whitespace-pre-wrap text-sm bg-black/40 border border-slate-800 rounded p-3">
             {result.service_report}
           </pre>
 
           {result.local_only && (
             <div className="bg-amber-900/20 border border-amber-600/60 text-amber-200 p-3 rounded text-sm">
-              Running on on-device offline fallback model. This job is queued
-              for backend reconciliation when connectivity returns.
+              You are working offline on this phone. Everything is saved here
+              and will sync when connection returns.
             </div>
           )}
 
           {result.status === "QUEUED_OFFLINE" ? (
             <div className="bg-yellow-900/20 border border-yellow-600/60 text-yellow-200 p-3 rounded text-sm">
-              This submission is queued on-device. Replay queue when
-              connectivity returns to run backend agents.
-            </div>
-          ) : result.requires_approval ? (
-            <div className="bg-orange-900/20 border border-orange-600/60 text-orange-200 p-3 rounded text-sm">
-              This job escalated to supervisor review and should appear in the
-              Supervisor Queue.
+              This job is saved offline. It will process automatically once
+              you reconnect.
             </div>
           ) : (
             <div className="bg-sky-900/20 border border-sky-600/50 text-sky-200 p-3 rounded text-sm">
-              This job did not escalate. Only `PENDING_APPROVAL` jobs appear in
-              Supervisor Queue.
+              {"Flow: Gather details -> Send quote -> Get customer approval -> Start repair steps."}
             </div>
           )}
+
+          <div className="bg-black/30 border border-slate-800 rounded p-3 space-y-3">
+            <div className="text-xs uppercase tracking-wide text-slate-400">
+              Quote and Customer
+            </div>
+            <div className="text-xs text-slate-400">
+              Current stage:{" "}
+              <span className="font-mono text-slate-200">
+                {quoteStage ? quoteStage.replace(/_/g, " ") : "Not started"}
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={handleGenerateQuote}
+                disabled={!canGenerateQuote || quoteBusy}
+                className={`px-3 py-2 rounded text-xs font-semibold ${
+                  canGenerateQuote
+                    ? "bg-slate-800 border border-slate-700 hover:border-slate-500"
+                    : "bg-slate-900 border border-slate-800 text-slate-500"
+                }`}
+              >
+                {quoteBusy ? "Generating..." : "1) Generate Quote"}
+              </button>
+              <button
+                onClick={handleDraftQuoteEmail}
+                disabled={!canDraftQuoteEmail || emailBusy}
+                className={`px-3 py-2 rounded text-xs font-semibold ${
+                  canDraftQuoteEmail
+                    ? "bg-indigo-900/40 border border-indigo-700 hover:border-indigo-500"
+                    : "bg-slate-900 border border-slate-800 text-slate-500"
+                }`}
+              >
+                {emailBusy ? "Drafting..." : "2) Draft Customer Email"}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <input
+                value={quoteRecipientName}
+                onChange={(event) => setQuoteRecipientName(event.target.value)}
+                className="bg-black border border-slate-700 p-2 rounded text-sm"
+                placeholder="Customer name (optional)"
+              />
+              <input
+                value={quoteRecipientEmail}
+                onChange={(event) => setQuoteRecipientEmail(event.target.value)}
+                className="bg-black border border-slate-700 p-2 rounded text-sm"
+                placeholder="Customer email (optional)"
+              />
+            </div>
+
+            {quotePackage && (
+              <div className="bg-black/40 border border-slate-800 rounded p-3 text-sm space-y-1">
+                <div>
+                  Quote <span className="font-mono">{quotePackage.quote_id || "N/A"}</span>
+                </div>
+                <div>Subtotal: ${Number(quotePackage.subtotal_usd || 0).toFixed(2)}</div>
+                <div>Tax: ${Number(quotePackage.tax_usd || 0).toFixed(2)}</div>
+                <div className="font-semibold">Total: ${Number(quotePackage.total_usd || 0).toFixed(2)}</div>
+              </div>
+            )}
+
+            {quoteEmailDraft?.subject && (
+              <details className="bg-black/40 border border-slate-800 rounded p-3 text-sm">
+                <summary className="cursor-pointer text-slate-200">Email Draft Preview</summary>
+                <div className="pt-3 space-y-2">
+                  <div>
+                    <span className="text-slate-400">Subject:</span> {quoteEmailDraft.subject}
+                  </div>
+                  <pre className="whitespace-pre-wrap text-xs bg-black/40 border border-slate-800 rounded p-2">
+                    {quoteEmailDraft.body_text}
+                  </pre>
+                </div>
+              </details>
+            )}
+
+            {canRecordCustomerDecision && (
+              <div className="bg-emerald-900/20 border border-emerald-700/60 rounded p-3 space-y-2">
+                <div className="text-sm text-emerald-200">
+                  Email is ready. Record customer decision:
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleCustomerDecision("approve")}
+                    disabled={customerBusy}
+                    className="bg-emerald-700 hover:bg-emerald-600 px-3 py-2 rounded text-xs font-semibold"
+                  >
+                    {customerBusy ? "Saving..." : "Customer Approved"}
+                  </button>
+                  <button
+                    onClick={() => handleCustomerDecision("deny")}
+                    disabled={customerBusy}
+                    className="bg-red-700 hover:bg-red-600 px-3 py-2 rounded text-xs font-semibold"
+                  >
+                    {customerBusy ? "Saving..." : "Customer Declined"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
 
           <div
             className={`border rounded p-3 text-sm ${
@@ -916,346 +2363,436 @@ export default function TriageEngine() {
                 : "bg-emerald-900/20 border-emerald-600/60 text-emerald-200"
             }`}
           >
-            <div className="text-xs uppercase tracking-wide mb-1">
-              Workflow Mode: {workflowMode}
-            </div>
-            <div>
-              {result.workflow_intent ||
-                (investigationOnly
-                  ? "Collect additional evidence for supervisor decision. Fix guidance is suppressed."
-                  : "Execute repair workflow and verify issue resolution.")}
-            </div>
-            {Array.isArray(result.allowed_actions) &&
-              result.allowed_actions.length > 0 && (
-                <div className="text-xs mt-2">
-                  Allowed actions: {result.allowed_actions.join(", ")}
-                </div>
-              )}
+            {result.workflow_intent ||
+              (investigationOnly
+                ? "Run the diagnostic checklist first, then prepare the quote and customer handoff."
+                : "Run the repair checklist and confirm the fix before closing the job.")}
           </div>
 
-          {Array.isArray(result.escalation_reasons) &&
-            result.escalation_reasons.length > 0 && (
-              <div className="bg-slate-800/60 border border-slate-700 text-slate-200 p-3 rounded text-sm">
-                Escalation reasons: {result.escalation_reasons.join(", ")}
+          {canCompleteRepair && (
+            <div className="bg-emerald-900/20 border border-emerald-700/60 rounded p-3 space-y-2">
+              <div className="text-sm font-semibold text-emerald-200">
+                Complete Job
+              </div>
+              <div className="text-xs text-emerald-300">
+                When repair is finished, complete the ticket to remove it from Open Tickets.
+              </div>
+              <input
+                value={completionNotes}
+                onChange={(event) => setCompletionNotes(event.target.value)}
+                className="w-full bg-black border border-slate-700 p-2 rounded text-sm"
+                placeholder="Completion notes (optional)"
+              />
+              <button
+                type="button"
+                onClick={handleCompleteRepair}
+                disabled={completeBusy}
+                className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 px-3 py-2 rounded text-xs font-semibold"
+              >
+                {completeBusy ? "Completing..." : "Complete Job"}
+              </button>
+            </div>
+          )}
+
+          {String(result.status || "").toUpperCase() === "REPAIR_COMPLETED" && (
+            <div className="bg-emerald-900/20 border border-emerald-700/60 rounded p-3 text-sm text-emerald-200">
+              This ticket is completed and moved out of the Open Tickets queue.
+            </div>
+          )}
+
+          <section className="bg-black/30 border border-slate-800 rounded p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="text-xs uppercase tracking-wide text-slate-400">
+                Similar Past Jobs
+              </div>
+              {loadingSimilarIssues && (
+                <div className="text-[11px] text-slate-500">Checking history...</div>
+              )}
+            </div>
+            {similarIssues.length === 0 ? (
+              <div className="text-xs text-slate-500">
+                No strong historical match found yet for this issue.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {similarIssues.map((item) => (
+                  <div
+                    key={`similar-${item.job_id}`}
+                    className="border border-slate-800 rounded p-2 bg-black/20"
+                  >
+                    <div className="text-[11px] font-mono text-slate-400">{item.job_id}</div>
+                    <div className="text-xs text-slate-300">
+                      Similarity: {Math.round(Number(item.score || 0) * 100)}%
+                      {" | "}
+                      {item.equipment_id || "N/A"} | {item.fault_code || "N/A"}
+                    </div>
+                    <div className="text-xs text-slate-400 mt-1">
+                      {item.issue_text || "No issue summary available."}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handlePreviewSimilarJob(item.job_id)}
+                        disabled={similarPreviewLoadingJobId === item.job_id}
+                        className="border border-slate-700 hover:border-slate-500 px-2 py-1 rounded text-[11px] font-semibold"
+                      >
+                        {similarPreviewExpandedJobId === item.job_id
+                          ? "Hide Details"
+                          : similarPreviewLoadingJobId === item.job_id
+                            ? "Loading..."
+                            : "Preview"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => loadJobDetailsById(item.job_id)}
+                        className="border border-cummins-red/60 text-cummins-red hover:bg-cummins-red/10 px-2 py-1 rounded text-[11px] font-semibold"
+                      >
+                        Open Job
+                      </button>
+                    </div>
+                    {similarPreviewExpandedJobId === item.job_id &&
+                      (() => {
+                        const preview = similarPreviewByJobId[item.job_id];
+                        const job = preview?.job || {};
+                        const payload = job?.field_payload_json || {};
+                        const final = job?.final_response_json || {};
+                        return (
+                          <div className="mt-2 border border-slate-800 rounded p-2 bg-black/30 space-y-1">
+                            <div className="text-[11px] text-slate-400">
+                              Status: <span className="text-slate-200">{job?.status || item.status || "N/A"}</span>
+                            </div>
+                            <div className="text-[11px] text-slate-400">
+                              Location: <span className="text-slate-200">{payload?.location || "N/A"}</span>
+                              {" | "}
+                              Updated: <span className="text-slate-200">{job?.updated_ts || item.updated_ts || "N/A"}</span>
+                            </div>
+                            <div className="text-[11px] text-slate-400">
+                              Symptoms: <span className="text-slate-200">{truncateText(payload?.symptoms, 140)}</span>
+                            </div>
+                            <div className="text-[11px] text-slate-400">
+                              Notes: <span className="text-slate-200">{truncateText(payload?.notes, 140)}</span>
+                            </div>
+                            <div className="text-[11px] text-slate-400">
+                              Service report:{" "}
+                              <span className="text-slate-200">{truncateText(final?.service_report, 220)}</span>
+                            </div>
+                            <div className="text-[11px] text-slate-500">
+                              Checklist steps: {Array.isArray(preview?.workflow_steps) ? preview.workflow_steps.length : 0}
+                              {" | "}
+                              Attachments: {Array.isArray(preview?.attachments) ? preview.attachments.length : 0}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                  </div>
+                ))}
               </div>
             )}
+          </section>
 
-          <details className="bg-black/30 border border-slate-800 rounded p-3 text-sm">
-            <summary className="text-xs uppercase tracking-wide text-slate-400 cursor-pointer">
-              Technical Details
-            </summary>
-            <div className="space-y-3 pt-3">
-              <div className="bg-black/30 border border-slate-800 rounded p-3 text-sm space-y-1">
-                <div className="text-xs uppercase tracking-wide text-slate-400">
-                  Escalation Decision
-                </div>
-                <div>
-                  Policy version:{" "}
-                  <span className="font-mono text-slate-300">
-                    {result.escalation_policy_version || "N/A"}
-                  </span>
-                </div>
-                <div>
-                  Risk source:{" "}
-                  <span className="font-semibold text-slate-200">
-                    {result.risk_signals?.source || "N/A"}
-                  </span>
-                  {" | "}confidence: {result.risk_signals?.confidence ?? "N/A"}
-                </div>
-                <div>
-                  Safety signal:{" "}
-                  {String(Boolean(result.risk_signals?.safety_signal))}
-                </div>
-                <div>
-                  Warranty signal:{" "}
-                  {String(Boolean(result.risk_signals?.warranty_signal))}
-                </div>
-                <div className="text-xs text-slate-400">
-                  Matched safety terms:{" "}
-                  {(result.risk_signals?.matched_terms?.safety || []).join(
-                    ", ",
-                  ) || "none"}
-                </div>
-                <div className="text-xs text-slate-400">
-                  Matched warranty terms:{" "}
-                  {(result.risk_signals?.matched_terms?.warranty || []).join(
-                    ", ",
-                  ) || "none"}
-                </div>
-                <div className="text-xs text-slate-400">
-                  Rationale:{" "}
-                  {result.risk_signals?.rationale || "No rationale available"}
-                </div>
-              </div>
-
-              <div className="bg-black/30 border border-slate-800 rounded p-3 text-sm space-y-1">
-                <div className="text-xs uppercase tracking-wide text-slate-400">
-                  Model Route
-                </div>
-                <div>
-                  Mode:{" "}
-                  <span className="font-mono">
-                    {result.mode_effective || "N/A"}
-                  </span>
-                </div>
-                <div>
-                  Model:{" "}
-                  <span className="font-mono">
-                    {result.model_selected || "N/A"}
-                  </span>
-                </div>
-                <div>
-                  Tier:{" "}
-                  <span className="font-mono">
-                    {result.model_tier || "N/A"}
-                  </span>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div className="bg-black/30 border border-slate-800 rounded p-3 text-sm">
-                  <div className="text-xs uppercase text-red-400 mb-2">
-                    Agent 1: Triage
-                  </div>
-                  <div className="text-slate-300">
-                    Confidence: {result.triage?.confidence}
-                  </div>
-                  <div className="text-slate-300 mt-1">
-                    {result.triage?.summary}
-                  </div>
-                </div>
-                <div className="bg-black/30 border border-slate-800 rounded p-3 text-sm">
-                  <div className="text-xs uppercase text-red-400 mb-2">
-                    Agent 2: Parts / Evidence
-                  </div>
-                  <div className="text-slate-300">
-                    Confidence: {result.evidence?.confidence}
-                  </div>
-                  <div className="text-slate-300 mt-1">
-                    Parts:{" "}
-                    {(result.evidence?.parts_candidates || []).join(", ")}
-                  </div>
-                </div>
-                <div className="bg-black/30 border border-slate-800 rounded p-3 text-sm">
-                  <div className="text-xs uppercase text-red-400 mb-2">
-                    Agent 3: Scheduler
-                  </div>
-                  <div className="text-slate-300">
-                    Priority: {result.schedule_hint?.priority_hint || "N/A"}
-                  </div>
-                  <div className="text-slate-300 mt-1">
-                    ETA: {result.schedule_hint?.eta_bucket || "N/A"}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </details>
-
-          <button
-            onClick={handleLoadJobDetails}
-            disabled={loadingDetails}
-            className="border border-slate-600 hover:border-slate-500 px-3 py-2 rounded text-sm"
-          >
-            {loadingDetails
-              ? "Loading job details..."
-              : "Load Full Job + Decision Log"}
-          </button>
-          <button
-            onClick={refreshWorkflow}
-            disabled={loadingWorkflow}
-            className="border border-slate-600 hover:border-slate-500 px-3 py-2 rounded text-sm ml-2"
-          >
-            {loadingWorkflow ? "Refreshing workflow..." : "Refresh Workflow"}
-          </button>
-          <button
-            onClick={handleReplan}
-            disabled={replanning}
-            className="border border-purple-700 text-purple-200 hover:bg-purple-950/30 px-3 py-2 rounded text-sm ml-2"
-          >
-            {replanning ? "Replanning..." : "Replan Job"}
-          </button>
-          <button
-            onClick={() => loadTimeline(createdJobId)}
-            disabled={loadingTimeline}
-            className="border border-slate-600 hover:border-slate-500 px-3 py-2 rounded text-sm ml-2"
-          >
-            {loadingTimeline ? "Loading timeline..." : "Load Timeline"}
-          </button>
         </section>
       )}
 
-      {workflowSteps.length > 0 && (
+      {activeMenu === "job" && workflowSteps.length > 0 && (
         <section className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-3">
           <h3 className="font-bold text-lg">
             {investigationOnly
-              ? "Step-by-Step Evidence Checklist"
+              ? "Step-by-Step Diagnostic Checklist"
               : "Step-by-Step Repair Checklist"}
           </h3>
           <p className="text-xs text-slate-400">
             {investigationOnly
-              ? "Do only these checks for now. Repairs stay locked until supervisor approval."
+              ? "Do these diagnostic checks first. Repair steps unlock after customer approval."
               : "Work through each step. If a step fails, mark it and ask for help."}
           </p>
+          {workflowPartsLocation && (
+            <p className="text-xs text-slate-500">
+              Parts location: {workflowPartsLocation}
+              {loadingWorkflowParts ? " (refreshing...)" : ""}
+            </p>
+          )}
+          {!canUsePartsNow && (
+            <p className="text-xs text-slate-500">
+              Parts usage unlocks only after customer approval when repair is active.
+            </p>
+          )}
+          {partsActionMessage && (
+            <div className="bg-emerald-900/20 border border-emerald-700/60 text-emerald-200 p-2 rounded text-xs">
+              {partsActionMessage}
+            </div>
+          )}
+          {workflowActionMessage && (
+            <div className="bg-sky-900/20 border border-sky-700/60 text-sky-200 p-2 rounded text-xs">
+              {workflowActionMessage}
+            </div>
+          )}
           <div className="space-y-3">
-            {workflowSteps.map((step) => (
-              <div
-                key={step.step_id}
-                className="border border-slate-800 rounded p-3 space-y-2"
-              >
-                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-                  <div>
-                    <div className="text-sm font-semibold">
-                      {step.step_order}. {step.title}
+            {workflowSteps.map((step) => {
+              const stepParts = workflowPartsByStep[step.step_id] || [];
+              return (
+                <div
+                  key={step.step_id}
+                  className="border border-slate-800 rounded p-3 space-y-2"
+                >
+                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-semibold">
+                        {step.step_order}. {step.title}
+                      </div>
+                      <div className="text-sm leading-relaxed text-slate-300 mt-1">
+                        {toReadableInstruction(step.instructions)}
+                      </div>
+                      <div className="text-xs text-slate-400 mt-2">
+                        <span className="text-slate-500 uppercase text-[11px]">
+                          Capture
+                        </span>
+                        {": "}
+                        {toFriendlyList(step.required_inputs || []).join(" • ") ||
+                          "N/A"}
+                      </div>
+                      <div className="text-xs text-slate-400">
+                        <span className="text-slate-500 uppercase text-[11px]">
+                          Done when
+                        </span>
+                        {": "}
+                        {toFriendlyList(step.pass_criteria || []).join(", ") ||
+                          "N/A"}
+                      </div>
+                      <div className="text-xs text-slate-400">
+                        <span className="text-slate-500 uppercase text-[11px]">
+                          Recommended parts
+                        </span>
+                        {": "}
+                        {!canUsePartsNow || investigationOnly || step.suppressed
+                          ? "Shown once repair starts after customer approval."
+                          : (step.recommended_parts || []).join(", ") || "N/A"}
+                      </div>
                     </div>
-                    <div className="text-xs text-slate-400">
-                      {step.instructions}
-                    </div>
-                    <div className="text-xs text-slate-500 mt-2">
-                      What to capture:{" "}
-                      {(step.required_inputs || []).join(", ") || "N/A"}
-                    </div>
-                    <div className="text-xs text-slate-500">
-                      Done when:{" "}
-                      {(step.pass_criteria || []).join(", ") || "N/A"}
-                    </div>
-                    <div className="text-xs text-slate-500">
-                      Recommended parts:{" "}
-                      {investigationOnly || step.suppressed
-                        ? "Suppressed pending supervisor decision."
-                        : (step.recommended_parts || []).join(", ") || "N/A"}
+                    <div className="flex gap-2 text-[11px] font-semibold">
+                      <span className="px-2 py-1 rounded bg-red-900/20 border border-red-800 text-red-200">
+                        {toFriendlyRisk(step.risk_level)}
+                      </span>
+                      <span className="px-2 py-1 rounded bg-slate-800 border border-slate-700 text-slate-200">
+                        {toFriendlyStatus(step.status)}
+                      </span>
                     </div>
                   </div>
-                  <div className="text-xs font-mono">
-                    {toFriendlyRisk(step.risk_level)} | status={step.status}
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                  <input
-                    value={stepMeasurements[step.step_id] || ""}
-                    onChange={(event) =>
-                      setStepMeasurements((prev) => ({
-                        ...prev,
-                        [step.step_id]: event.target.value,
-                      }))
-                    }
-                    placeholder="Reading/number (optional)"
-                    className="bg-black border border-slate-700 p-2 rounded text-sm"
-                  />
-                  <input
-                    value={stepNotes[step.step_id] || ""}
-                    onChange={(event) =>
-                      setStepNotes((prev) => ({
-                        ...prev,
-                        [step.step_id]: event.target.value,
-                      }))
-                    }
-                    placeholder="What you observed (optional)"
-                    className="bg-black border border-slate-700 p-2 rounded text-sm"
-                  />
-                  <input
-                    value={attachmentCaptionByStep[step.step_id] || ""}
-                    onChange={(event) =>
-                      setAttachmentCaptionByStep((prev) => ({
-                        ...prev,
-                        [step.step_id]: event.target.value,
-                      }))
-                    }
-                    placeholder="Photo caption (optional)"
-                    className="bg-black border border-slate-700 p-2 rounded text-sm"
-                  />
-                  <label className="flex items-center gap-2 text-xs text-slate-300 p-2">
+
+                  {canUsePartsNow && stepParts.length > 0 && (
+                    <div className="bg-black/30 border border-slate-800 rounded p-2 space-y-2">
+                      <div className="text-xs uppercase tracking-wide text-slate-400">
+                        Use Parts For This Step
+                      </div>
+                      {stepParts.map((part) => {
+                        const partId = String(part?.part_id || "");
+                        const key = partUsageKey(step.step_id, partId || part?.part_name);
+                        const qtyValue = String(partQtyByKey[key] || "1");
+                        const qtyOnHand = Number(part?.quantity_on_hand || 0);
+                        const canUse = canUsePartsNow && Boolean(createdJobId) && Boolean(partId) && qtyOnHand > 0;
+                        return (
+                          <div
+                            key={`${step.step_id}-${partId || part?.part_name || "unknown"}`}
+                            className="flex flex-col md:flex-row md:items-center gap-2 border border-slate-800 rounded p-2"
+                          >
+                            <div className="flex-1">
+                              <div className="text-xs font-semibold text-slate-200">
+                                {part?.part_name || "Unknown part"}
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                                <span className={`px-2 py-0.5 rounded border ${stockTone(part?.stock_status)}`}>
+                                  {part?.stock_status || "UNKNOWN"}
+                                </span>
+                                <span className="text-slate-400">
+                                  Qty: {qtyOnHand} | Part ID: {partId || "not in catalog"}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <input
+                                value={qtyValue}
+                                onChange={(event) =>
+                                  setPartQtyByKey((prev) => ({
+                                    ...prev,
+                                    [key]: event.target.value.replace(/[^0-9]/g, ""),
+                                  }))
+                                }
+                                className="w-16 bg-black border border-slate-700 p-2 rounded text-xs"
+                                placeholder="Qty"
+                              />
+                              <button
+                                type="button"
+                                disabled={!canUse || usingPartKey === key}
+                                onClick={() => handleUsePart(step.step_id, part)}
+                                className={`px-3 py-2 rounded text-xs font-semibold ${
+                                  canUse
+                                    ? "bg-cummins-red/30 border border-cummins-red hover:bg-cummins-red/40"
+                                    : "bg-slate-900 border border-slate-800 text-slate-500"
+                                }`}
+                              >
+                                {usingPartKey === key
+                                  ? "Saving..."
+                                  : canUse
+                                    ? "Use Part"
+                                    : "Out / Unknown"}
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                     <input
-                      type="checkbox"
-                      checked={Boolean(stepManualEscalation[step.step_id])}
+                      value={stepMeasurements[step.step_id] || ""}
                       onChange={(event) =>
-                        setStepManualEscalation((prev) => ({
+                        setStepMeasurements((prev) => ({
                           ...prev,
-                          [step.step_id]: event.target.checked,
+                          [step.step_id]: event.target.value,
                         }))
                       }
+                      placeholder="Reading/number (optional)"
+                      className="bg-black border border-slate-700 p-2 rounded text-sm"
                     />
-                    Ask supervisor to review this step
-                  </label>
-                  <div className="flex flex-wrap gap-2 items-center p-2">
-                    <label className="bg-sky-700 hover:bg-sky-600 px-3 py-1 rounded text-xs font-semibold cursor-pointer">
-                      Take Photo
+                    <input
+                      value={stepNotes[step.step_id] || ""}
+                      onChange={(event) =>
+                        setStepNotes((prev) => ({
+                          ...prev,
+                          [step.step_id]: event.target.value,
+                        }))
+                      }
+                      placeholder="What you observed (optional)"
+                      className="bg-black border border-slate-700 p-2 rounded text-sm"
+                    />
+                    <input
+                      value={attachmentCaptionByStep[step.step_id] || ""}
+                      onChange={(event) =>
+                        setAttachmentCaptionByStep((prev) => ({
+                          ...prev,
+                          [step.step_id]: event.target.value,
+                        }))
+                      }
+                      placeholder="Photo caption (optional)"
+                      className="bg-black border border-slate-700 p-2 rounded text-sm"
+                    />
+                    <label className="flex items-center gap-2 text-xs text-slate-300 p-2">
                       <input
-                        type="file"
-                        accept="image/*"
-                        capture="environment"
-                        className="hidden"
-                        disabled={uploadingAttachmentStepId === step.step_id || !createdJobId}
-                        onChange={(event) => handleAttachmentSelection(step.step_id, "camera", event)}
+                        type="checkbox"
+                        checked={Boolean(stepManualEscalation[step.step_id])}
+                        disabled
+                        onChange={(event) =>
+                          setStepManualEscalation((prev) => ({
+                            ...prev,
+                            [step.step_id]: event.target.checked,
+                          }))
+                        }
                       />
+                      Supervisor routing disabled in this flow
                     </label>
-                    <label className="bg-indigo-700 hover:bg-indigo-600 px-3 py-1 rounded text-xs font-semibold cursor-pointer">
-                      Upload Image
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        disabled={uploadingAttachmentStepId === step.step_id || !createdJobId}
-                        onChange={(event) => handleAttachmentSelection(step.step_id, "gallery", event)}
-                      />
-                    </label>
-                    {uploadingAttachmentStepId === step.step_id && (
-                      <span className="text-xs text-slate-400">Uploading image...</span>
-                    )}
+                    <div className="flex flex-wrap gap-2 items-center p-2">
+                      <label className="bg-sky-700 hover:bg-sky-600 px-3 py-1 rounded text-xs font-semibold cursor-pointer">
+                        Take Photo
+                        <input
+                          type="file"
+                          accept="image/*"
+                          capture="environment"
+                          className="hidden"
+                          disabled={uploadingAttachmentStepId === step.step_id || !createdJobId}
+                          onChange={(event) => handleAttachmentSelection(step.step_id, "camera", event)}
+                        />
+                      </label>
+                      <label className="bg-indigo-700 hover:bg-indigo-600 px-3 py-1 rounded text-xs font-semibold cursor-pointer">
+                        Upload Image
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          disabled={uploadingAttachmentStepId === step.step_id || !createdJobId}
+                          onChange={(event) => handleAttachmentSelection(step.step_id, "gallery", event)}
+                        />
+                      </label>
+                      {uploadingAttachmentStepId === step.step_id && (
+                        <span className="text-xs text-slate-400">Uploading image...</span>
+                      )}
+                    </div>
+                  </div>
+                  {(attachmentsByStep[step.step_id] || []).length > 0 && (
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                      {(attachmentsByStep[step.step_id] || []).map((item) => (
+                        <div
+                          key={`${item.attachment_id}-${item.created_ts || ""}`}
+                          className="bg-black/40 border border-slate-800 rounded p-2 text-xs space-y-1"
+                        >
+                          {item.content_url ? (
+                            <a
+                              href={toAttachmentUrl(item.content_url)}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="block"
+                            >
+                              <img
+                                src={toAttachmentUrl(item.content_url)}
+                                alt={item.caption || item.filename || "Attachment"}
+                                className="w-full h-24 object-cover rounded border border-slate-700"
+                              />
+                            </a>
+                          ) : (
+                            <div className="w-full h-24 rounded border border-slate-700 bg-slate-900 flex items-center justify-center text-slate-500">
+                              queued
+                            </div>
+                          )}
+                          <div className="truncate text-slate-300">{item.filename || "attachment"}</div>
+                          <div className="truncate text-slate-500">{item.caption || "No caption"}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex gap-2">
+                    <button
+                      disabled={updatingStepId === step.step_id}
+                      onClick={() => handleStepUpdate(step.step_id, "done")}
+                      className="bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-xs font-semibold"
+                    >
+                      Mark Done
+                    </button>
+                    <button
+                      disabled={updatingStepId === step.step_id}
+                      onClick={() => handleStepUpdate(step.step_id, "blocked")}
+                      className="bg-yellow-700 hover:bg-yellow-600 px-3 py-1 rounded text-xs font-semibold"
+                    >
+                      Need Help
+                    </button>
+                    <button
+                      disabled={updatingStepId === step.step_id}
+                      onClick={() => handleStepUpdate(step.step_id, "failed")}
+                      className="bg-red-700 hover:bg-red-600 px-3 py-1 rounded text-xs font-semibold"
+                    >
+                      Did Not Work
+                    </button>
                   </div>
                 </div>
-                {(attachmentsByStep[step.step_id] || []).length > 0 && (
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                    {(attachmentsByStep[step.step_id] || []).map((item) => (
-                      <div
-                        key={`${item.attachment_id}-${item.created_ts || ""}`}
-                        className="bg-black/40 border border-slate-800 rounded p-2 text-xs space-y-1"
-                      >
-                        {item.content_url ? (
-                          <a
-                            href={toAttachmentUrl(item.content_url)}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="block"
-                          >
-                            <img
-                              src={toAttachmentUrl(item.content_url)}
-                              alt={item.caption || item.filename || "Attachment"}
-                              className="w-full h-24 object-cover rounded border border-slate-700"
-                            />
-                          </a>
-                        ) : (
-                          <div className="w-full h-24 rounded border border-slate-700 bg-slate-900 flex items-center justify-center text-slate-500">
-                            queued
-                          </div>
-                        )}
-                        <div className="truncate text-slate-300">{item.filename || "attachment"}</div>
-                        <div className="truncate text-slate-500">{item.caption || "No caption"}</div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <div className="flex gap-2">
-                  <button
-                    disabled={updatingStepId === step.step_id}
-                    onClick={() => handleStepUpdate(step.step_id, "done")}
-                    className="bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-xs font-semibold"
-                  >
-                    Mark Done
-                  </button>
-                  <button
-                    disabled={updatingStepId === step.step_id}
-                    onClick={() => handleStepUpdate(step.step_id, "blocked")}
-                    className="bg-yellow-700 hover:bg-yellow-600 px-3 py-1 rounded text-xs font-semibold"
-                  >
-                    Need Help
-                  </button>
-                  <button
-                    disabled={updatingStepId === step.step_id}
-                    onClick={() => handleStepUpdate(step.step_id, "failed")}
-                    className="bg-red-700 hover:bg-red-600 px-3 py-1 rounded text-xs font-semibold"
-                  >
-                    Didn't Work
-                  </button>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {activeMenu === "job" && partsUsage.length > 0 && (
+        <section className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-2">
+          <div className="text-sm font-semibold">Parts Used On This Job</div>
+          <div className="space-y-2">
+            {partsUsage.slice(0, 12).map((entry) => (
+              <div
+                key={`parts-usage-${entry.id}`}
+                className="border border-slate-800 rounded p-2 text-xs"
+              >
+                <div className="font-mono text-slate-500">{entry.ts}</div>
+                <div className="text-slate-200">
+                  {entry.part_name_snapshot || entry.part_id} x{entry.quantity_used}
+                </div>
+                <div className="text-slate-400">
+                  Step: {entry.step_id} | Location: {entry.location}
                 </div>
               </div>
             ))}
@@ -1263,81 +2800,6 @@ export default function TriageEngine() {
         </section>
       )}
 
-      {workflowEvents.length > 0 && (
-        <details className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-2">
-          <summary className="font-bold text-lg cursor-pointer">
-            Workflow Events (Advanced)
-          </summary>
-          <div className="max-h-64 overflow-auto border border-slate-800 rounded mt-2">
-            {workflowEvents.map((event) => (
-              <div
-                key={event.id}
-                className="p-3 border-b border-slate-800 last:border-b-0 text-xs"
-              >
-                <div className="font-mono text-slate-400">
-                  {event.ts} | {event.actor_id} | {event.event_type}
-                </div>
-                <div>
-                  step: {event.step_id || "N/A"} | output:{" "}
-                  {JSON.stringify(event.output_json || {})}
-                </div>
-              </div>
-            ))}
-          </div>
-        </details>
-      )}
-
-      {jobDetails?.decision_log?.length > 0 && (
-        <details className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-2">
-          <summary className="font-bold text-lg cursor-pointer">
-            Decision Log (Advanced)
-          </summary>
-          <div className="max-h-80 overflow-auto border border-slate-800 rounded mt-2">
-            {jobDetails.decision_log.map((entry) => (
-              <div
-                key={entry.id}
-                className="p-3 border-b border-slate-800 last:border-b-0 text-sm"
-              >
-                <div className="font-mono text-xs text-slate-400">
-                  {entry.ts} | {entry.agent_id} | {entry.action}
-                </div>
-                <div className="text-slate-200">
-                  confidence: {entry.confidence}
-                </div>
-              </div>
-            ))}
-          </div>
-        </details>
-      )}
-
-      {timeline.length > 0 && (
-        <details className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-2">
-          <summary className="font-bold text-lg cursor-pointer">
-            Timeline (Advanced)
-          </summary>
-          <div className="max-h-80 overflow-auto border border-slate-800 rounded mt-2">
-            {timeline.map((event) => (
-              <div
-                key={`${event.kind}-${event.event_id}-${event.ts}`}
-                className="p-3 border-b border-slate-800 last:border-b-0 text-xs"
-              >
-                <div className="font-mono text-slate-400">
-                  {event.ts} | {event.kind} | {event.actor_id} |{" "}
-                  {event.event_name}
-                </div>
-                {event.step_id && <div>step: {event.step_id}</div>}
-                {typeof event.confidence === "number" && (
-                  <div>confidence: {event.confidence}</div>
-                )}
-              </div>
-            ))}
-          </div>
-        </details>
-      )}
     </div>
   );
 }
-
-
-
-
